@@ -345,6 +345,36 @@ func TestAikoqlDepthZeroRejected(t *testing.T) {
 	}
 }
 
+// The ontology layer injects external_id into Properties; the stored side is
+// read back with it stripped. The compare must ignore reserved keys or every
+// rerun updates every object (AC-ING-005).
+func TestAikoqlUpsertIgnoresReservedKeysInCompare(t *testing.T) {
+	f := &fakeDB{script: []fakeCall{
+		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []map[string]any{{
+			"koid": "k1", "type_name": "Issue", "version": 1,
+			"properties": map[string]any{"external_id": "e1", "koid": "k1", "type_name": "Issue"},
+		}}})},
+		{tool: "get", out: rawJSON(t, map[string]any{
+			"koid": "k1", "version": 1, "type_name": "Issue",
+			"properties": map[string]any{"n": float64(1)},
+		})},
+	}}
+	s := knowledge.NewAikoql(f)
+	got, err := s.Upsert(context.Background(), knowledge.KnowledgeObject{
+		TypeName: "Issue", ExternalID: "e1",
+		Properties: map[string]any{"external_id": "e1", "n": float64(1)},
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if got.Version != 1 {
+		t.Errorf("version = %d, want 1 (no update on identical payload)", got.Version)
+	}
+	if len(f.calls) != 2 {
+		t.Errorf("calls = %d, want 2 (no update remember)", len(f.calls))
+	}
+}
+
 func TestAikoqlRelateNotFound(t *testing.T) {
 	f := &fakeDB{script: []fakeCall{{tool: "relate", err: notFoundErr("relate", "k9")}}}
 	s := knowledge.NewAikoql(f)

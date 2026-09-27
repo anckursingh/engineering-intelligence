@@ -367,13 +367,22 @@ func wireToKO(w *koWire) (KnowledgeObject, error) {
 	return ko, nil
 }
 
-// sameProps compares payloads; empty maps of either side are equivalent to
-// nil (the wire round-trip can normalize one to the other).
-func sameProps(a, b map[string]any) bool {
-	if reflect.DeepEqual(a, b) {
+// sameProps compares payloads, ignoring adapter-reserved keys on the
+// incoming side (wireToKO already strips them from the stored side — the
+// ontology layer legitimately injects external_id into Properties). Empty
+// maps of either side are equivalent to nil (the wire round-trip can
+// normalize one to the other).
+func sameProps(stored, incoming map[string]any) bool {
+	b := make(map[string]any, len(incoming))
+	for k, v := range incoming {
+		if k != externalIDKey && k != provenanceKey {
+			b[k] = v
+		}
+	}
+	if reflect.DeepEqual(stored, b) {
 		return true
 	}
-	return len(a) == 0 && len(b) == 0
+	return len(stored) == 0 && len(b) == 0
 }
 
 // mapErr translates server error codes into contract errors. NOT_FOUND and

@@ -22,7 +22,7 @@ Phase 1A (GitHub slice): done. Working: Phase 1B (contract freeze).
 - [x] 3. Add AIKOQL client unit tests — fakeDB-scripted: upsert/idempotency/retrieval/relationships/traversal/error mapping/ctx cancellation (§5 order)
 - [x] 4. Implement AIKOQL client — `internal/knowledge/aikoql.go` (AikoqlStore over a thin `aikoqlDB` CallTool surface); transport errors never leak past `knowledge` errors
 - [x] 5. Add AikoqlStore — passes the same contract suite (11/11 live) + restart persistence
-- [ ] 6. Run GitHub acceptance suite against AikoqlStore — swap the store, all ACs stay green
+- [x] 6. Run GitHub acceptance suite against AikoqlStore — suite parametrized on a StoreFactory; all 6 ACs green on Memory AND live AikoqlStore (TestAcceptanceSlice1Aikoql)
 - [ ] 7. Add tenant-scoped identity — (tenant, source, external_id) never collide; isolation tests (§8)
 - [ ] 8. Add ingestion application layer — `internal/ingestion` (§10–12): mutation model + atomicity, relationship vocabulary finalized
 - [ ] 9. Refactor GitHub connector through the ingestion layer

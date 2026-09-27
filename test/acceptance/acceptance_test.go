@@ -4,6 +4,10 @@
 // the exported API (github.Config/Sync/Count, knowledge, checkpoint) plus the
 // shared fake world.
 //
+// The suite is store-agnostic: it runs against Memory (always) and against
+// AikoqlStore (live server, gated on AIKOQL_MCP_BIN) to prove the storage
+// contract is not a Memory convenience.
+//
 // Not automatable here (later slices or manual): AC-ID-001/003 (Jira +
 // cross-source merge), AC-KG-002/003, all MET/INT/UI, AC-AQ-004 (proven by
 // the aikoql container smoke; becomes a CI job with the SDK adapter).
@@ -11,9 +15,12 @@ package acceptance
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ancku/aikoql-sdk"
 	"github.com/anckursingh/engineering-intelligence/internal/checkpoint"
 	"github.com/anckursingh/engineering-intelligence/internal/github"
 	"github.com/anckursingh/engineering-intelligence/internal/github/githubtest"
@@ -22,9 +29,40 @@ import (
 )
 
 func TestAcceptanceSlice1(t *testing.T) {
+	runAcceptance(t, func(t *testing.T) knowledge.KnowledgeStore {
+		t.Helper()
+		return knowledge.NewMemory()
+	})
+}
+
+// TestAcceptanceSlice1Aikoql runs the same ACs against a live aikoql server
+// (fresh per subtest, over stdio) â€” every acceptance criterion must hold on
+// the real persistence layer, not just the in-memory double.
+func TestAcceptanceSlice1Aikoql(t *testing.T) {
+	runAcceptance(t, func(t *testing.T) knowledge.KnowledgeStore {
+		t.Helper()
+		bin := os.Getenv("AIKOQL_MCP_BIN")
+		if bin == "" {
+			t.Skip("AIKOQL_MCP_BIN not set")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		t.Cleanup(cancel)
+		c, err := aikoql.DialStdio(ctx, bin, "serve", filepath.Join(t.TempDir(), "kb"))
+		if err != nil {
+			t.Fatalf("DialStdio: %v", err)
+		}
+		t.Cleanup(func() { c.Close() })
+		if err := c.Initialize(ctx); err != nil {
+			t.Fatalf("Initialize: %v", err)
+		}
+		return knowledge.NewAikoql(c)
+	})
+}
+
+func runAcceptance(t *testing.T, newStore func(t *testing.T) knowledge.KnowledgeStore) {
 	t.Run("AC-ING-001 incremental sync", func(t *testing.T) {
 		w := githubtest.NewWorld(t)
-		store := knowledge.NewMemory()
+		store := newStore(t)
 		cfg := w.SyncConfig(t.TempDir(), store)
 		if _, err := github.Sync(context.Background(), cfg); err != nil {
 			t.Fatal(err)
@@ -48,7 +86,7 @@ func TestAcceptanceSlice1(t *testing.T) {
 
 	t.Run("AC-ING-004 AC-REL-001 checkpoint survives failure", func(t *testing.T) {
 		w := githubtest.NewWorld(t)
-		store := knowledge.NewMemory()
+		store := newStore(t)
 		cfg := w.SyncConfig(t.TempDir(), store)
 		if _, err := github.Sync(context.Background(), cfg); err != nil {
 			t.Fatal(err)
@@ -80,7 +118,7 @@ func TestAcceptanceSlice1(t *testing.T) {
 
 	t.Run("AC-ING-005 AC-REL-002 rerun is idempotent", func(t *testing.T) {
 		w := githubtest.NewWorld(t)
-		cfg := w.SyncConfig(t.TempDir(), knowledge.NewMemory())
+		cfg := w.SyncConfig(t.TempDir(), newStore(t))
 		if _, err := github.Sync(context.Background(), cfg); err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +135,7 @@ func TestAcceptanceSlice1(t *testing.T) {
 
 	t.Run("AC-ID-002 identity decisions are explainable", func(t *testing.T) {
 		w := githubtest.NewWorld(t)
-		store := knowledge.NewMemory()
+		store := newStore(t)
 		cfg := w.SyncConfig(t.TempDir(), store)
 		if _, err := github.Sync(context.Background(), cfg); err != nil {
 			t.Fatal(err)
@@ -122,7 +160,7 @@ func TestAcceptanceSlice1(t *testing.T) {
 
 	t.Run("AC-KG-001 PR traverses to author repo issue review", func(t *testing.T) {
 		w := githubtest.NewWorld(t)
-		store := knowledge.NewMemory()
+		store := newStore(t)
 		cfg := w.SyncConfig(t.TempDir(), store)
 		if _, err := github.Sync(context.Background(), cfg); err != nil {
 			t.Fatal(err)
@@ -141,7 +179,7 @@ func TestAcceptanceSlice1(t *testing.T) {
 
 	t.Run("AC-KG-004 provenance retained on every object", func(t *testing.T) {
 		w := githubtest.NewWorld(t)
-		store := knowledge.NewMemory()
+		store := newStore(t)
 		cfg := w.SyncConfig(t.TempDir(), store)
 		res, err := github.Sync(context.Background(), cfg)
 		if err != nil {

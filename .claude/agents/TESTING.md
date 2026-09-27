@@ -59,7 +59,8 @@ The server is the source of truth; these facts were measured against the live bi
 
 A feature is not complete if any of these regress:
 AC-ING-001, AC-ING-004, AC-ING-005, AC-ID-002, AC-KG-001, AC-KG-004, AC-REL-001, AC-REL-002
-(`go test -run TestAcceptanceSlice1 ./test/acceptance/`)
+(`go test -run TestAcceptanceSlice1 ./test/acceptance/`; the same suite runs against a live
+AikoqlStore with `AIKOQL_MCP_BIN` set via `-run TestAcceptanceSlice1Aikoql`)
 
 ## Failure semantics (§34)
 
