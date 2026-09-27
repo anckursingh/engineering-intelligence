@@ -15,6 +15,8 @@ If a requirement is ambiguous, the TDD doc wins. Update this file as each item c
 
 Phase 1A (GitHub slice): done. The §36 commit sequence is complete (items 1–21); item 22 completed the §38 MVP path — the one missing box was "one AI-development telemetry source", now the Claude Code connector (`internal/claudecode`); item 23 makes the MVP runnable — `ei sync github|jira`, `ei ingest claude`, `ei serve` all over one AIKOQL store (AIKOQL_MCP_BIN + --db); item 24 adds §33 run observability (one JSON line per run, secrets impossible by construction). All MVP-path boxes are built and tested: GitHub + Jira + one AI telemetry source → normalization → persistent identity resolution → canonical ontology → provenance → AIKOQL → deterministic metrics → evidence model → investigation engine → API → minimal board → evidence-backed natural-language investigation — and the §38 six MVP questions are answerable through the API (mapping in TESTING.md §38).
 
+**Contract exhausted.** Every buildable doc section is implemented and tested; the §40 north-star diagram matches the built pipeline. The only unchecked TESTING.md rows are documented deferrals with named triggers: §13.2 event-driven ingestion (webhooks — duplicate/out-of-order events, needs equivalent acceptance coverage first) and §32 scale benchmarks (blocked on the server's fixed 120 calls/min stdio rate limit; the `batch` tool or a raised limit is the path — do not build until a real sync needs it).
+
 ## Commit sequence (§36)
 
 - [x] 1. Add KnowledgeStore contract tests — `internal/knowledge/knowledgetest`, graded against Memory
