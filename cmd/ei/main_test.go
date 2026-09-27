@@ -4,7 +4,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +44,48 @@ func TestRunRequiredFlagsBeforeStore(t *testing.T) {
 		if err := run(c.args); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("run(%v) = %v, want %q", c.args, err, c.want)
 		}
+	}
+}
+
+// TestRunLogShape (§33): one JSON line per ingestion run carrying the
+// structured fields, and — by construction — no sensitive key can ever be
+// logged: runLog has no token/secret/PII field, and the test would fail if
+// one were added.
+func TestRunLogShape(t *testing.T) {
+	var buf bytes.Buffer
+	if err := logRun(&buf, runLog{
+		RunID: "r1", Source: "github", TenantID: "default",
+		StartedAt:            time.Now().Add(-time.Second),
+		EndedAt:              time.Now(),
+		ObjectsSeen:          5,
+		ObjectsCreated:       2,
+		ObjectsUpdated:       1,
+		ObjectsSkipped:       2,
+		RelationshipsWritten: 3,
+		Checkpoint:           ".ei/checkpoint.json",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("not one JSON object: %v (%s)", err, buf.String())
+	}
+	for _, k := range []string{"run_id", "source", "tenant_id", "started_at", "ended_at",
+		"objects_seen", "objects_created", "objects_updated", "objects_skipped",
+		"relationships_written", "checkpoint"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing key %q in %s", k, buf.String())
+		}
+	}
+	for k := range m {
+		for _, bad := range []string{"token", "secret", "password", "email", "prompt"} {
+			if strings.Contains(strings.ToLower(k), bad) {
+				t.Errorf("sensitive key %q present in %s", k, buf.String())
+			}
+		}
+	}
+	if _, ok := m["errors"]; ok {
+		t.Error("errors key present on a clean run")
 	}
 }
 

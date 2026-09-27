@@ -5,9 +5,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -121,6 +123,7 @@ func runGitHub(args []string) error {
 	}
 	defer closeStore()
 
+	started := time.Now()
 	res, err := github.Sync(context.Background(), github.Config{
 		Owner:          *owner,
 		Repos:          repos,
@@ -129,6 +132,23 @@ func runGitHub(args []string) error {
 		Token:          os.Getenv("GITHUB_TOKEN"),
 		Store:          store,
 	})
+	l := runLog{Source: "github", TenantID: "default", StartedAt: started, EndedAt: time.Now(), Checkpoint: *checkpointPath}
+	if res != nil {
+		l.RunID = res.RunID
+		for _, c := range res.Counts {
+			l.ObjectsCreated += c.New
+			l.ObjectsUpdated += c.Updated
+			l.ObjectsSkipped += c.Skipped
+		}
+		l.ObjectsSeen = l.ObjectsCreated + l.ObjectsUpdated + l.ObjectsSkipped
+		l.RelationshipsWritten = res.Relationships
+	}
+	if err != nil {
+		l.Errors = err.Error()
+	}
+	if lerr := logRun(os.Stderr, l); lerr != nil {
+		return errors.Join(err, fmt.Errorf("log run: %w", lerr))
+	}
 	if err != nil {
 		return err
 	}
@@ -168,6 +188,7 @@ func runJira(args []string) error {
 	}
 	defer closeStore()
 
+	started := time.Now()
 	res, err := jira.Sync(context.Background(), jira.Config{
 		BaseURL:        *baseURL,
 		Email:          *email,
@@ -177,6 +198,21 @@ func runJira(args []string) error {
 		Since:          since,
 		Store:          store,
 	})
+	l := runLog{Source: "jira", TenantID: "default", StartedAt: started, EndedAt: time.Now(), Checkpoint: *checkpointPath}
+	if res != nil {
+		l.RunID = res.RunID
+		for _, c := range res.Counts {
+			l.ObjectsCreated += c.New
+			l.ObjectsUpdated += c.Updated
+		}
+		l.ObjectsSeen = l.ObjectsCreated + l.ObjectsUpdated
+	}
+	if err != nil {
+		l.Errors = err.Error()
+	}
+	if lerr := logRun(os.Stderr, l); lerr != nil {
+		return errors.Join(err, fmt.Errorf("log run: %w", lerr))
+	}
 	if err != nil {
 		return err
 	}
@@ -217,7 +253,25 @@ func runClaude(args []string) error {
 	}
 	defer closeStore()
 
+	started := time.Now()
 	res, err := claudecode.Sync(context.Background(), claudecode.Config{Dir: *dir, Store: store})
+	l := runLog{Source: "claude-code", TenantID: "default", StartedAt: started, EndedAt: time.Now()}
+	if res != nil {
+		l.RunID = res.RunID
+		for _, c := range res.Counts {
+			l.ObjectsCreated += c.New
+			l.ObjectsUpdated += c.Updated
+			l.ObjectsSkipped += c.Skipped
+		}
+		l.ObjectsSeen = l.ObjectsCreated + l.ObjectsUpdated + l.ObjectsSkipped
+		l.RelationshipsWritten = res.Relationships
+	}
+	if err != nil {
+		l.Errors = err.Error()
+	}
+	if lerr := logRun(os.Stderr, l); lerr != nil {
+		return errors.Join(err, fmt.Errorf("log run: %w", lerr))
+	}
 	if err != nil {
 		return err
 	}
@@ -263,6 +317,40 @@ func runServe(args []string) error {
 	fmt.Printf("serving Engineering Intelligence API on %s\n", *addr)
 	return http.ListenAndServe(*addr, intelligence.NewAPI(store))
 }
+
+// runLog is the §33 structured record of one ingestion run, emitted as one
+// JSON line to stderr. It deliberately carries no token/secret/PII field —
+// TestRunLogShape fails if one is ever added.
+type runLog struct {
+	RunID                string    `json:"run_id"`
+	Source               string    `json:"source"`
+	TenantID             string    `json:"tenant_id"`
+	StartedAt            time.Time `json:"started_at"`
+	EndedAt              time.Time `json:"ended_at"`
+	ObjectsSeen          int       `json:"objects_seen"`
+	ObjectsCreated       int       `json:"objects_created"`
+	ObjectsUpdated       int       `json:"objects_updated"`
+	ObjectsSkipped       int       `json:"objects_skipped"`
+	RelationshipsWritten int       `json:"relationships_written"`
+	Errors               string    `json:"errors,omitempty"`
+	Checkpoint           string    `json:"checkpoint"`
+}
+
+func logRun(w io.Writer, l runLog) error {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("marshal run log: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "%s\n", b); err != nil {
+		return fmt.Errorf("write run log: %w", err)
+	}
+	return nil
+}
+
+// counted matches the connector Count types that track skipped objects
+// (github, claudecode; jira has no skipped concept).
+// ponytail: field access on type parameters is rejected behind ~struct terms
+// (verified on go1.25.1), so each site sums its own concrete Count.
 
 func parseSince(s string) (time.Time, error) {
 	if s == "" {

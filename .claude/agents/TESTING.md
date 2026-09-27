@@ -239,8 +239,17 @@ Do not claim scalability until measured. Currently measured: per-op latency only
 
 ## Observability (§33)
 
-- [ ] run_id, tenant_id, source, connector_version, started_at / ended_at, objects seen / created / updated / skipped, relationships_written, errors, checkpoint
-- [ ] never log access tokens, secrets, private AI prompts, unnecessary PII
+- [x] one JSON line per ingestion run on stderr (`run_id`, `source`, `tenant_id` (default), `started_at`/`ended_at`, `objects_seen`/`objects_created`/`objects_updated`/`objects_skipped`, `relationships_written`, `errors`, `checkpoint`) — `cmd/ei` `runLog`/`logRun`; `TestRunLogShape` pins the key set (required keys present, no `errors` on a clean run). `connector_version` is stamped per-object in provenance (`github-connector/v0`, `jira-connector/v0`, `ei-ai/v0`) rather than repeated in the run line (ponytail: export the consts if a log consumer needs it).
+- [x] never log access tokens, secrets, private AI prompts, unnecessary PII — by construction: `runLog` has no token/secret/PII field, and `TestRunLogShape` fails if a sensitive key (`token`/`secret`/`password`/`email`/`prompt`) is ever added. `errors` carries connector error text only (tokens never appear in URLs/error paths).
+
+## §38 MVP questions — answerable through the built API
+
+1. What changed in engineering performance? → `POST /ask` + `POST /investigations` (cycle time change)
+2. How did flow, quality and reliability change? → `GET /board` (flow metrics; quality/reliability honest notes until CI/deployment sources exist)
+3. How is AI-assisted development changing the workflow? → `ai_assisted_pr_pct` on the board + as an investigation factor
+4. What evidence supports the observed change? → every observation/factor carries an `evidence` array citing object IDs (§20)
+5. What is observed versus calculated versus inferred? → `epistemic_state` per observation + board Evidence Coverage section
+6. What can the system not conclude? → `limitations` + the association-not-causation statement (§23)
 
 ## CLI wiring (§38 runnable MVP)
 
