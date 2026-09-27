@@ -14,6 +14,7 @@ import (
 
 	"github.com/anckursingh/engineering-intelligence/internal/checkpoint"
 	"github.com/anckursingh/engineering-intelligence/internal/identity"
+	"github.com/anckursingh/engineering-intelligence/internal/ingestion"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
@@ -57,7 +58,7 @@ type syncer struct {
 	ctx      context.Context
 	client   *Client
 	store    knowledge.KnowledgeStore
-	runID    string
+	run      *ingestion.Run
 	counts   map[string]Count
 	rels     int
 	totalNew int
@@ -74,7 +75,8 @@ type syncer struct {
 
 // upsert counts New/Updated honestly: the store bumps Version only when the
 // property payload changed, so the pre-upsert version distinguishes "changed"
-// from "re-seen identical" (which counts nothing).
+// from "re-seen identical" (which counts nothing). Writes go through the
+// ingestion Run, which stamps run-scoped provenance (§10).
 // ponytail: two store round-trips per object; the SDK adapter can batch the
 // pre-check once real latency shows up.
 func (s *syncer) upsert(ko knowledge.KnowledgeObject) (string, error) {
@@ -82,27 +84,30 @@ func (s *syncer) upsert(ko knowledge.KnowledgeObject) (string, error) {
 	if prevErr != nil && !errors.Is(prevErr, knowledge.ErrNotFound) {
 		return "", fmt.Errorf("github: lookup %s %s: %w", ko.TypeName, ko.ExternalID, prevErr)
 	}
-	res, err := s.store.Upsert(s.ctx, ko)
+	res, err := s.run.Apply(s.ctx, s.store, ingestion.Mutation{Objects: []knowledge.KnowledgeObject{ko}})
 	if err != nil {
 		return "", fmt.Errorf("github: upsert %s %s: %w", ko.TypeName, ko.ExternalID, err)
 	}
+	stored := res.Objects[0]
 	c := s.counts[ko.TypeName]
 	if prevErr != nil {
 		c.New++
 		s.totalNew++
-	} else if res.Version > prev.Version {
+	} else if stored.Version > prev.Version {
 		c.Updated++
 	}
 	s.counts[ko.TypeName] = c
-	return res.Koid, nil
+	return stored.Koid, nil
 }
 
 func (s *syncer) relate(from, to string, relType ontology.RelType) error {
-	err := s.store.Relate(s.ctx, knowledge.Relationship{Type: string(relType), From: from, To: to})
+	res, err := s.run.Apply(s.ctx, s.store, ingestion.Mutation{
+		Relationships: []knowledge.Relationship{{Type: string(relType), From: from, To: to}},
+	})
 	if err != nil {
 		return fmt.Errorf("github: relate %s %s->%s: %w", relType, from, to, err)
 	}
-	s.rels++
+	s.rels += res.Relationships
 	return nil
 }
 
@@ -142,8 +147,7 @@ func (s *syncer) engineer(p identity.Person, prov knowledge.Provenance) (string,
 
 // Sync runs one incremental GitHub synchronization.
 func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
-	runStart := time.Now().UTC()
-	runID := runStart.Format("20060102T150405Z")
+	run := ingestion.NewRun()
 
 	ck, err := checkpoint.Load(cfg.CheckpointPath)
 	if err != nil {
@@ -172,7 +176,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		ctx:         ctx,
 		client:      client,
 		store:       store,
-		runID:       runID,
+		run:         run,
 		counts:      map[string]Count{},
 		byLogin:     map[string]string{},
 		byEmail:     map[string]string{},
@@ -189,7 +193,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		return nil, fmt.Errorf("github: get organization %s: %w", cfg.Owner, err)
 	}
 	orgOnt := toOrganization(org)
-	orgKO, err := orgOnt.KnowledgeObject(ontology.NewProvenance(orgOnt.HTMLURL, orgOnt.UpdatedAt, runID))
+	orgKO, err := orgOnt.KnowledgeObject(ontology.NewProvenance(orgOnt.HTMLURL, orgOnt.UpdatedAt))
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +224,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		}
 		key := cfg.Owner + "/" + name
 		repoOnt := toRepository(r, cfg.Owner)
-		repoKO, err := repoOnt.KnowledgeObject(ontology.NewProvenance(repoOnt.HTMLURL, repoOnt.UpdatedAt, runID))
+		repoKO, err := repoOnt.KnowledgeObject(ontology.NewProvenance(repoOnt.HTMLURL, repoOnt.UpdatedAt))
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +232,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := s.relate(repoKoid, orgKoid, ontology.RelPartOf); err != nil {
+		if err := s.relate(repoKoid, orgKoid, ontology.RelBelongsTo); err != nil {
 			return nil, err
 		}
 
@@ -246,9 +250,9 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 	// Advance the checkpoint only after a fully successful run: a crash
 	// re-runs everything since the last committed checkpoint, and idempotent
 	// upserts make the overlap harmless (AC-ING-004, AC-REL-001).
-	ck.Github.UpdatedSince = runStart
+	ck.Github.UpdatedSince = run.StartedAt
 	ck.Runs = append(ck.Runs, checkpoint.RunRecord{
-		StartedAt:  runStart,
+		StartedAt:  run.StartedAt,
 		EndedAt:    time.Now().UTC(),
 		Owner:      cfg.Owner,
 		NewObjects: s.totalNew,
@@ -260,7 +264,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		return nil, err
 	}
 
-	return &SyncResult{RunID: runID, Counts: s.counts, Relationships: s.rels, Checkpoint: ck}, nil
+	return &SyncResult{RunID: run.ID, Counts: s.counts, Relationships: s.rels, Checkpoint: ck}, nil
 }
 
 // syncCommits fetches default-branch commits unless the head SHA is
@@ -294,7 +298,7 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 		}
 		for _, c := range batch {
 			commitOnt := toCommit(c, owner, repo)
-			ko, err := commitOnt.KnowledgeObject(ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt, s.runID))
+			ko, err := commitOnt.KnowledgeObject(ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
 			if err != nil {
 				return err
 			}
@@ -310,7 +314,7 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 				name, email = comm.GetAuthor().GetName(), comm.GetAuthor().GetEmail()
 			}
 			p := identity.Resolve(name, email, c.GetAuthor().GetLogin())
-			engKoid, err := s.engineer(p, ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt, s.runID))
+			engKoid, err := s.engineer(p, ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
 			if err != nil {
 				return err
 			}
@@ -355,7 +359,7 @@ func (s *syncer) syncIssues(owner, repo string, watermark time.Time) error {
 			s.counts["Issue"] = c
 			continue
 		}
-		ko, err := issueOnt.KnowledgeObject(ontology.NewProvenance(i.GetHTMLURL(), issueOnt.UpdatedAt, s.runID))
+		ko, err := issueOnt.KnowledgeObject(ontology.NewProvenance(i.GetHTMLURL(), issueOnt.UpdatedAt))
 		if err != nil {
 			return err
 		}
@@ -389,7 +393,7 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 			continue
 		}
 
-		ko, err := prOnt.KnowledgeObject(ontology.NewProvenance(p.GetHTMLURL(), prOnt.UpdatedAt, s.runID))
+		ko, err := prOnt.KnowledgeObject(ontology.NewProvenance(p.GetHTMLURL(), prOnt.UpdatedAt))
 		if err != nil {
 			return err
 		}
@@ -404,7 +408,7 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 		// Author (beyond the PRD core list — AC-KG-001 requires PR→author traversal).
 		if prOnt.AuthorLogin != "" {
 			person := identity.Resolve("", "", prOnt.AuthorLogin)
-			engKoid, err := s.engineer(person, ontology.NewProvenance(p.GetHTMLURL(), prOnt.UpdatedAt, s.runID))
+			engKoid, err := s.engineer(person, ontology.NewProvenance(p.GetHTMLURL(), prOnt.UpdatedAt))
 			if err != nil {
 				return err
 			}
@@ -420,10 +424,10 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 			return err
 		}
 
-		// Merge commit: PART_OF edge when the commit is on the default branch.
+		// Merge commit: MERGED_AS edge when the commit is on the default branch.
 		if prOnt.Merged && prOnt.MergeCommitSHA != "" {
 			if commitKoid, ok := s.shaToCommit[strings.ToLower(prOnt.MergeCommitSHA)]; ok {
-				if err := s.relate(commitKoid, prKoid, ontology.RelPartOf); err != nil {
+				if err := s.relate(prKoid, commitKoid, ontology.RelMergedAs); err != nil {
 					return err
 				}
 			}
@@ -454,7 +458,7 @@ func (s *syncer) syncPRIssues(owner, repo, prKoid string, pr ontology.PullReques
 				return fmt.Errorf("github: refetch issue %s/%s#%d: %w", owner, repo, num, err)
 			}
 			issueOnt := toIssue(i, owner, repo)
-			ko, err := issueOnt.KnowledgeObject(ontology.NewProvenance(i.GetHTMLURL(), issueOnt.UpdatedAt, s.runID))
+			ko, err := issueOnt.KnowledgeObject(ontology.NewProvenance(i.GetHTMLURL(), issueOnt.UpdatedAt))
 			if err != nil {
 				return err
 			}
@@ -480,7 +484,7 @@ func (s *syncer) syncReviews(owner, repo string, prKoid string, prNumber int) er
 	}
 	for _, r := range reviews {
 		reviewOnt := toReview(r, owner, repo, prNumber)
-		ko, err := reviewOnt.KnowledgeObject(ontology.NewProvenance(r.GetHTMLURL(), reviewOnt.SubmittedAt, s.runID))
+		ko, err := reviewOnt.KnowledgeObject(ontology.NewProvenance(r.GetHTMLURL(), reviewOnt.SubmittedAt))
 		if err != nil {
 			return err
 		}
@@ -488,12 +492,12 @@ func (s *syncer) syncReviews(owner, repo string, prKoid string, prNumber int) er
 		if err != nil {
 			return err
 		}
-		if err := s.relate(reviewKoid, prKoid, ontology.RelPartOf); err != nil {
+		if err := s.relate(prKoid, reviewKoid, ontology.RelContainsReview); err != nil {
 			return err
 		}
 		if reviewOnt.ReviewerLogin != "" {
 			p := identity.Resolve("", "", reviewOnt.ReviewerLogin)
-			engKoid, err := s.engineer(p, ontology.NewProvenance(r.GetHTMLURL(), reviewOnt.SubmittedAt, s.runID))
+			engKoid, err := s.engineer(p, ontology.NewProvenance(r.GetHTMLURL(), reviewOnt.SubmittedAt))
 			if err != nil {
 				return err
 			}

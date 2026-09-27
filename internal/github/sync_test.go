@@ -51,14 +51,14 @@ func TestSyncRun1Full(t *testing.T) {
 	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1, "github.com:issue:acme/widgets#1")
 	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelReviewedBy), knowledge.Outbound, 1, "github.com:user:ann")
 	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelAuthored), knowledge.Inbound, 2, "github.com:user:ann")
-	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelPartOf), knowledge.Inbound, 2,
-		"github.com:review:acme/widgets#3@1001", "github.com:commit:acme/widgets@"+githubtest.ShaB)
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelMergedAs), knowledge.Outbound, 1, "github.com:commit:acme/widgets@"+githubtest.ShaB)
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelContainsReview), knowledge.Outbound, 1, "github.com:review:acme/widgets#3@1001")
 
 	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
 	if err != nil {
 		t.Fatal(err)
 	}
-	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelPartOf), knowledge.Outbound, 1, "github.com:org:acme")
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelBelongsTo), knowledge.Outbound, 1, "github.com:org:acme")
 
 	// commit → author linkage works for both login and email identities
 	commitA, err := store.GetByExternalID(context.Background(), "github.com:commit:acme/widgets@"+githubtest.ShaA)

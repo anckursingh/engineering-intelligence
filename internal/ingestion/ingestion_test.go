@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/anckursingh/engineering-intelligence/internal/ingestion"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
@@ -196,6 +197,33 @@ func runIngestion(t *testing.T, newStore func(t *testing.T) knowledge.KnowledgeS
 		var pf *ingestion.PartialFailure
 		if !errors.As(err, &pf) || pf.Element != "object 0" || !errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want PartialFailure object 0 wrapping context.Canceled", err)
+		}
+	})
+
+	// §10: the layer owns run-scoped provenance — ObservedAt and IngestionRun
+	// are stamped per object; connector-supplied values are never clobbered.
+	t.Run("stamps-provenance", func(t *testing.T) {
+		s := newStore(t)
+		run := ingestion.NewRun()
+		res, err := run.Apply(context.Background(), s, ingestion.Mutation{Objects: []knowledge.KnowledgeObject{
+			{TypeName: "Issue", ExternalID: "ing:pv-a", Properties: map[string]any{"n": float64(1)},
+				Provenance: knowledge.Provenance{Source: "src", SourceURL: "https://x"}},
+			{TypeName: "Issue", ExternalID: "ing:pv-b", Properties: map[string]any{"n": float64(1)},
+				Provenance: knowledge.Provenance{Source: "src", ObservedAt: time.Now().Add(-time.Hour), IngestionRun: "pre-stamped"}},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stamped := res.Objects[0].Provenance
+		if stamped.IngestionRun != run.ID || !stamped.ObservedAt.Equal(run.StartedAt) {
+			t.Errorf("stamped provenance = %+v, want run ID %s and ObservedAt %v", stamped, run.ID, run.StartedAt)
+		}
+		if stamped.Source != "src" || stamped.SourceURL != "https://x" {
+			t.Errorf("source fields lost: %+v", stamped)
+		}
+		pre := res.Objects[1].Provenance
+		if pre.IngestionRun != "pre-stamped" || pre.ObservedAt.IsZero() {
+			t.Errorf("connector-supplied provenance was clobbered: %+v", pre)
 		}
 	})
 }

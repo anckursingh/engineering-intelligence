@@ -30,7 +30,7 @@ func TestExternalIDScheme(t *testing.T) {
 }
 
 func TestEngineerExternalIDByRule(t *testing.T) {
-	prov := NewProvenance("https://x", time.Now().UTC(), "run")
+	prov := NewProvenance("https://x", time.Now().UTC())
 
 	byLogin := Engineer{Name: "A", Login: "octo", IdentityKey: "login:octo", IdentityRule: "login"}
 	ko, err := byLogin.KnowledgeObject(prov)
@@ -53,7 +53,7 @@ func TestEngineerExternalIDByRule(t *testing.T) {
 
 func TestMappingProvenanceAndProperties(t *testing.T) {
 	src := time.Date(2026, 9, 1, 12, 0, 0, 0, time.FixedZone("IST", 19800)) // 06:30 UTC
-	prov := NewProvenance("https://example.com/x", src, "run-1")
+	prov := NewProvenance("https://example.com/x", src)
 	if prov.Source != "github" {
 		t.Errorf("source = %q, want github", prov.Source)
 	}
@@ -63,8 +63,10 @@ func TestMappingProvenanceAndProperties(t *testing.T) {
 	if prov.SourceUpdatedAt.Location() != time.UTC {
 		t.Errorf("SourceUpdatedAt not UTC")
 	}
-	if prov.ObservedAt.IsZero() || prov.IngestionRun != "run-1" || prov.ConnectorVersion == "" {
-		t.Errorf("provenance incomplete: %+v", prov)
+	// Run-scoped fields are the ingestion layer's job (§10), not the
+	// connector's: the ontology constructor must leave them unset.
+	if !prov.ObservedAt.IsZero() || prov.IngestionRun != "" || prov.ConnectorVersion == "" {
+		t.Errorf("provenance mis-owned: %+v", prov)
 	}
 
 	o := Organization{Login: "acme", Name: "Acme Inc", CreatedAt: src, UpdatedAt: src}
@@ -95,14 +97,14 @@ func TestMappingProvenanceAndProperties(t *testing.T) {
 
 // AC-KG-004: every mapped type carries provenance.
 func TestKnowledgeObjectCarriesProvenanceAllTypes(t *testing.T) {
-	prov := NewProvenance("https://x", time.Now().UTC(), "run")
+	prov := NewProvenance("https://x", time.Now().UTC())
 	t0 := time.Now().UTC()
 	kofn := func(f func(knowledge.Provenance) (knowledge.KnowledgeObject, error)) knowledge.KnowledgeObject {
 		ko, err := f(prov)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ko.Provenance.Source != "github" || ko.Provenance.IngestionRun != "run" {
+		if ko.Provenance.Source != "github" || ko.Provenance.ConnectorVersion == "" {
 			t.Errorf("provenance not carried: %+v", ko.Provenance)
 		}
 		return ko

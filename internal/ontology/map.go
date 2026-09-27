@@ -9,16 +9,7 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 )
 
-type RelType string
-
-const (
-	RelPartOf     RelType = "PART_OF"     // Repository → Organization; Review → PullRequest; Commit → PullRequest
-	RelAuthored   RelType = "AUTHORED"    // Engineer → Commit; Engineer → PullRequest
-	RelImplements RelType = "IMPLEMENTS"  // PullRequest → Issue
-	RelTargets    RelType = "TARGETS"     // PullRequest → Repository
-	RelReviewedBy RelType = "REVIEWED_BY" // PullRequest → Engineer
-	RelPassed     RelType = "PASSED"      // PullRequest → Build; reserved until Build fetch lands
-)
+// RelType and the relationship vocabulary live in rels.go (§12).
 
 const connectorVersion = "github-connector/v0"
 
@@ -47,15 +38,14 @@ func BuildExternalID(owner, repo string, id int64) string {
 	return fmt.Sprintf("github.com:build:%s/%s:%d", owner, repo, id)
 }
 
-// NewProvenance is the single place EI constructs provenance so every
-// knowledge object carries it (AC-KG-004).
-func NewProvenance(sourceURL string, sourceUpdatedAt time.Time, ingestionRun string) knowledge.Provenance {
+// NewProvenance carries the source-side facts every knowledge object keeps
+// (AC-KG-004). Run-scoped fields (ObservedAt, IngestionRun) are the
+// ingestion layer's job (§10) and are stamped on Apply, not here.
+func NewProvenance(sourceURL string, sourceUpdatedAt time.Time) knowledge.Provenance {
 	return knowledge.Provenance{
 		Source:           "github",
 		SourceURL:        sourceURL,
-		ObservedAt:       time.Now().UTC(),
 		SourceUpdatedAt:  sourceUpdatedAt.UTC(),
-		IngestionRun:     ingestionRun,
 		ConnectorVersion: connectorVersion,
 	}
 }

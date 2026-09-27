@@ -47,6 +47,21 @@ Identity resolution tenant-scoped at the sync layer: `TestTenantScopedIdentityRe
 
 `ingestion.Run.Apply(store, Mutation{Objects, Relationships})` — objects first, then relationships; the first failing element stops the mutation as `*PartialFailure` ("object N"/"relationship N", errors unwrap). Atomicity is defined, never assumed: no transactions in AIKOQL, so applied elements persist (no rollback) and the compensation contract is re-apply — identical re-apply is a no-op (no version bump, no duplicate edge). Same-mutation relationships reference koids from the mutation that carried the objects (`Result.Objects`).
 
+Run-scoped provenance (§10): Apply stamps `ObservedAt = r.StartedAt` and `IngestionRun = r.ID` per object when unset, never clobbering connector-supplied values (`stamps-provenance` subtest, Memory + live). The GitHub connector routes every upsert/relate through Apply; identity-resolution maps and checkpoint advance-after-success stay in the connector.
+
+## Relationship vocabulary (§12)
+
+Every persisted relationship type is a data contract — do not rename casually. Per-rel table (source/target/meaning/inverse/cardinality/test) lives in `internal/ontology/rels.go` with the constants; each row is exercised by AC-KG-001 or the sync suite:
+
+| Rel | Source → Target | Direction change |
+|---|---|---|
+| BELONGS_TO | Repository → Organization | same as old PART_OF |
+| MERGED_AS | PullRequest → Commit | REVERSED from old PART_OF (commit→pr) |
+| CONTAINS_REVIEW | PullRequest → Review | REVERSED from old PART_OF (review→pr) |
+| AUTHORED / IMPLEMENTS / TARGETS / REVIEWED_BY | unchanged | — |
+
+PASSED (PullRequest → Build) is reserved until Build fetch lands.
+
 Live-server spawn helper extracted to `internal/knowledge/aikoqltest.Live(t)` (used by contract, acceptance, ingestion, benchmarks).
 
 Store-specific guarantees (Memory only, not portable): provenance-only change never bumps version.

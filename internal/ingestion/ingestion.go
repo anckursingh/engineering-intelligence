@@ -42,9 +42,9 @@ func (p *PartialFailure) Error() string { return fmt.Sprintf("ingestion: %s: %v"
 func (p *PartialFailure) Unwrap() error { return p.Err }
 
 // Run identifies one ingestion run and applies its mutations. It owns run
-// identity and mutation ordering; provenance stamping, identity-resolution
-// orchestration and checkpoint coordination join it when connectors route
-// their writes through Apply.
+// identity, mutation ordering and run-scoped provenance stamping;
+// identity-resolution orchestration and checkpoint coordination stay with
+// the connectors until a second source makes them shared.
 type Run struct {
 	ID        string
 	StartedAt time.Time
@@ -66,6 +66,13 @@ func (r *Run) Apply(ctx context.Context, store knowledge.KnowledgeStore, m Mutat
 	defer func() { r.EndedAt = time.Now().UTC() }()
 	applied := make([]knowledge.KnowledgeObject, 0, len(m.Objects))
 	for i, obj := range m.Objects {
+		// §10: the layer owns run-scoped provenance — fill, never clobber.
+		if obj.Provenance.ObservedAt.IsZero() {
+			obj.Provenance.ObservedAt = r.StartedAt
+		}
+		if obj.Provenance.IngestionRun == "" {
+			obj.Provenance.IngestionRun = r.ID
+		}
 		ko, err := store.Upsert(ctx, obj)
 		if err != nil {
 			return Result{Objects: applied}, &PartialFailure{

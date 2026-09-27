@@ -13,7 +13,7 @@ If a requirement is ambiguous, the TDD doc wins. Update this file as each item c
 
 ## Status
 
-Phase 1A (GitHub slice): done. Working: Phase 1B (contract freeze).
+Phase 1A (GitHub slice): done. Working: item 10 — §13 connector hardening.
 
 ## Commit sequence (§36)
 
@@ -24,10 +24,10 @@ Phase 1A (GitHub slice): done. Working: Phase 1B (contract freeze).
 - [x] 5. Add AikoqlStore — passes the same contract suite (11/11 live) + restart persistence
 - [x] 6. Run GitHub acceptance suite against AikoqlStore — suite parametrized on a StoreFactory; all 6 ACs green on Memory AND live AikoqlStore (TestAcceptanceSlice1Aikoql)
 - [x] 7. Add tenant-scoped identity — `knowledge.WithTenant`: (tenant, source, external_id) never collide; tenant contract 4/4 on Memory AND live AikoqlStore; sync-level resolution test (§8); no UI/auth added
-- [x] 8. Add ingestion application layer — `internal/ingestion` (§10–11): Mutation{Objects, Relationships} with defined non-atomicity (no tx in AIKOQL → *PartialFailure + re-apply compensation), Run identity/ordering; suite 5/5 on Memory AND live AikoqlStore. Provenance stamping, identity orchestration, checkpoint coordination and the §12 vocabulary land in item 9 when the connector routes through Apply
-- [ ] 9. Refactor GitHub connector through the ingestion layer
+- [x] 8. Add ingestion application layer — `internal/ingestion` (§10–11): Mutation{Objects, Relationships} with defined non-atomicity (no tx in AIKOQL → *PartialFailure + re-apply compensation), Run identity/ordering; suite 5/5 on Memory AND live AikoqlStore
+- [x] 9. Refactor GitHub connector through the ingestion layer — every sync write routes through `ingestion.Run.Apply`; the layer stamps run-scoped provenance (ObservedAt, IngestionRun) per object, never clobbering connector-supplied values; `ontology.NewProvenance(sourceURL, sourceUpdatedAt)` no longer carries run-scoped fields. Identity-resolution orchestration (run-local maps) and checkpoint advance-after-success stay in the connector until a second source makes them shared. All suites green on Memory AND live AikoqlStore
 - [ ] 10. Harden GitHub incremental sync — ctx-aware retry, merge-commit model, authoritative PR→issue links (§13)
-- [ ] 11. Refine relationship vocabulary — per rel: source, target, meaning, inverse, cardinality, test (§12)
+- [x] 11. Refine relationship vocabulary — absorbed into item 9: `internal/ontology/rels.go` carries the per-rel table (source, target, meaning, inverse, cardinality, test) + constants; PART_OF split into BELONGS_TO / MERGED_AS / CONTAINS_REVIEW (§12)
 - [ ] 12. Add Jira connector — only after persistence + tenant identity + ingestion exist (§14)
 - [ ] 13. Add cross-source identity resolution — persistent SourceIdentity RESOLVES_TO Engineer, never silent merges (§9, §15)
 - [ ] 14. Add deterministic metric engine — `internal/metrics` (§16–19)

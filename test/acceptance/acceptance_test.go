@@ -157,8 +157,8 @@ func runAcceptance(t *testing.T, newStore func(t *testing.T) knowledge.Knowledge
 		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1, "github.com:issue:acme/widgets#1")
 		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelReviewedBy), knowledge.Outbound, 1, "github.com:user:ann")
 		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelAuthored), knowledge.Inbound, 1, "github.com:user:ann")
-		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelPartOf), knowledge.Inbound, 2,
-			"github.com:review:acme/widgets#3@1001", "github.com:commit:acme/widgets@"+githubtest.ShaB)
+		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelMergedAs), knowledge.Outbound, 1, "github.com:commit:acme/widgets@"+githubtest.ShaB)
+		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelContainsReview), knowledge.Outbound, 1, "github.com:review:acme/widgets#3@1001")
 	})
 
 	t.Run("AC-KG-004 provenance retained on every object", func(t *testing.T) {
