@@ -43,6 +43,6 @@ Phase 1A (GitHub slice): done. Working: Phase 1B (contract freeze).
 
 Connector sprawl, autonomous production changes, productivity scores / individual ranking, custom ML, causal inference, big dashboards, k8s-first deployment, microservices, chatbot before deterministic investigations, EI-specific AIKOQL schema. No complexity "because the roadmap mentions it".
 
-## Exit gate for Phase 1B–1D (§39)
+## Exit gate for Phase 1B–1D (§39) — PASSED
 
-Against real AIKOQL: GitHub sync, identity resolution, idempotent rerun, checkpoint recovery, relationship creation, inbound + outbound traversal, provenance persistence, process restart. Only then move to tenant identity + ingestion.
+Against real AIKOQL: GitHub sync, identity resolution, idempotent rerun, checkpoint recovery, relationship creation, inbound + outbound traversal, provenance persistence, process restart — all green (contract 11/11 + acceptance 6/6 on live AikoqlStore). Behavior AND performance measured (§32): upsert 8.5ms, lookup 2.1ms, depth-3 traverse 4.9ms; stdio rate limit 120 calls/min blocks large-N runs — batch tool is the scale path when needed. Only then move to tenant identity + ingestion.

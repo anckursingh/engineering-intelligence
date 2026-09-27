@@ -76,10 +76,14 @@ Invariant: **never advance a committed checkpoint beyond data that has not been 
 
 ## Performance baselines (§32)
 
-- [ ] 1K / 10K / 100K / 1M objects: upsert + relate throughput, lookup / traversal latency, sync duration, memory, AIKOQL round trips
+- [x] per-op latency, live server over stdio (fresh DB per bench, `AIKOQL_MCP_BIN`, `go test ./internal/knowledge -run '^$' -bench BenchmarkAikoql -benchtime=1x`):
+  - upsert (create path, 4 round trips: index MATCH + remember + defensive get + index remember) ≈ **8.5ms/op**
+  - get by external ID (2 round trips: index MATCH + get) ≈ **2.1ms/op**
+  - depth-3 directed traverse, 20-node chain ≈ **4.9ms/op**
+- [ ] 1K / 10K / 100K / 1M objects: **blocked** — the stdio transport has a server-side fixed rate limit of **120 calls/min** (error `[-32000] rate limit exceeded (max 120 calls/min)`, key `_stdio`; no CLI knob in `serve --help`). A 1K-object setup costs ~4K calls ≈ 33+ min. Scale path: the server's `batch` tool (adapter-side batching), or a raised server limit — do not build until a real sync needs it.
 - [ ] connector scale: 10 / 100 / 1000 repositories; 10K / 100K / 1M issues
 
-Do not claim scalability until measured.
+Do not claim scalability until measured. Currently measured: per-op latency only.
 
 ## Observability (§33)
 
