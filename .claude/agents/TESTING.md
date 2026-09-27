@@ -113,6 +113,17 @@ Suite: `internal/evidence` (external package — metrics imports evidence, so th
 - No generated explanation text is the source of truth — `TestExplanationReconstructs` pins the §20 rule: persist the source objects, compute cycle time, re-read every cited ObjectID from the store, rebuild the population, recompute → identical value. Every insight's explanation reconstructs from source objects + deterministic calculations.
 - Metrics stamp what they are: `State=StateCalculated`, Type = ontology type, ObjectIDs = the objects computed from (cycle time cites the PR; review latency the PR + first review; throughput one entry citing every counted PR). OBSERVED evidence joins when a connector emits it; investigations (item 16) own the rest of the state ladder.
 
+## Investigation engine (§22–23)
+
+Suite: `internal/intelligence`. The first investigation, "Why did cycle time change?", is a deterministic function `CycleTimeChange(pop, a, b Window)` over a caller-built Population — item 17's API owns population building and graph traversal.
+
+- §22 flow outputs: Question, comparison windows, primary metric change (`Finding`: From/To/ChangePct), candidate contributing factors (other metrics that moved), evidence lineage per finding (pooled `evidence.Evidence` from both windows' observations), confidence, limitations, and a generated statement. Statements are generated text only — reconstruction still lives in evidence + the deterministic engine (§20).
+- Candidates = the metrics with data: review_latency, throughput. PR size is a documented limitation (no diff data). No custom stats, no causal inference (do-not-build §35).
+- §23 fixture pinned verbatim: Month A cycle time 2 days → Month B 4 days, review latency +100%, throughput −33.3% → statement ends "The data supports an association, but does not establish causality." The engine NEVER claims causation.
+- Honest factor rendering: unchanged → not a candidate; present in only one window → "appeared/disappeared in <window>" (never a fake zero); From == 0 → "changed from X to Y" without a percentage.
+- Edges: primary unchanged → "Cycle time did not change (X days).", no factors; primary missing in a window → "Not enough cycle_time data in <name> to investigate." (a result, not an error).
+- State = StateCalculated; Confidence = 1.0 — certainty of the arithmetic; the limitations field states it is not a causal link.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
