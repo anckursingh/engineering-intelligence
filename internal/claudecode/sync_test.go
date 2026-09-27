@@ -1,4 +1,4 @@
-// Claude Code telemetry connector tests (Â§25-26, Â§38 MVP path): one real AI
+// Claude Code telemetry connector tests (§25-26, §38 MVP path): one real AI
 // development telemetry source. A transcript is a log the tool itself wrote —
 // every extracted object is backed by a line in it, and every DIRECT
 // attribution cites the tool_use record as evidence. Anything the transcript
@@ -118,7 +118,7 @@ func writeTranscript(t *testing.T, name string, content []byte) string {
 	return dir
 }
 
-// TestParseSession: the canonical transcript normalizes into the Â§25 types,
+// TestParseSession: the canonical transcript normalizes into the §25 types,
 // with the PR link and DIRECT attribution taken from telemetry only.
 func TestParseSession(t *testing.T) {
 	dir := writeTranscript(t, "s1.jsonl", fixtureTranscript())
@@ -300,7 +300,7 @@ func TestSyncWritesTelemetry(t *testing.T) {
 		}
 	}
 
-	// The Â§26 evidence path: the seeded PR's inbound AI_CONTRIBUTES walk
+	// The §26 evidence path: the seeded PR's inbound AI_CONTRIBUTES walk
 	// reaches both contributions.
 	prKO, err := store.GetByExternalID(context.Background(), prExt)
 	if err != nil {

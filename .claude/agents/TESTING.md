@@ -242,6 +242,15 @@ Do not claim scalability until measured. Currently measured: per-op latency only
 - [ ] run_id, tenant_id, source, connector_version, started_at / ended_at, objects seen / created / updated / skipped, relationships_written, errors, checkpoint
 - [ ] never log access tokens, secrets, private AI prompts, unnecessary PII
 
+## CLI wiring (§38 runnable MVP)
+
+- `ei` dispatches `sync github` / `sync jira` / `ingest claude` / `serve`; anything else → usage error, exit 1.
+- `AIKOQL_MCP_BIN` names the server binary; `--db` its database dir. `openStore` dials over stdio with a 60s timeout and closes on every path (including Initialize failure).
+- **Flag validation happens before any store spawn** — pinned by `TestRunRequiredFlagsBeforeStore` (missing-flag cases run with `AIKOQL_MCP_BIN` unset; a store attempt would surface a different error and fail the test).
+- `ei serve --db DIR [--addr :8080]` = `http.ListenAndServe` over `intelligence.NewAPI` (§24/§28/§29 routes); the store lives for the process lifetime.
+- Summaries print each connector's SyncResult counts; re-seen-identical rows are skipped (`Count{}`), honest gaps (unlinked/unattributed/unparsed) always printed when nonzero.
+- Live proof: `TestOpenStoreLive` (upsert + GetByExternalID round trip through the CLI's own opener) + a full `ei ingest claude` smoke against a fresh db (exit 0, counts printed; contribution without a repo .git/config → `unattributed 1`, never fabricated).
+
 ## Definition of Done per feature (§37)
 
 All applicable rows true before "done":
