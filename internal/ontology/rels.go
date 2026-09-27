@@ -21,7 +21,7 @@ package ontology
 //	                meaning: the PR body references/closes the issue
 //	                inverse: implemented by (inbound traversal)
 //	                cardinality: N:M
-//	                test: AC-KG-001
+//	                test: AC-KG-001 + TestPRToIssueLinks (§13.4)
 //
 //	TARGETS         source PullRequest → target Repository
 //	                meaning: the PR is raised against the repo
@@ -40,7 +40,7 @@ package ontology
 //	                inverse: merged-as (inbound traversal)
 //	                cardinality: 1:1 per merge commit (head-commit
 //	                modeling joins in §13.3 without renaming this edge)
-//	                test: AC-KG-001 + TestSyncRun1Full
+//	                test: AC-KG-001 + TestSyncRun1Full + TestMergeCommitModel
 //
 //	CONTAINS_REVIEW source PullRequest → target Review
 //	                meaning: the review belongs to the PR

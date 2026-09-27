@@ -5,7 +5,9 @@ package github_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/anckursingh/engineering-intelligence/internal/checkpoint"
 	"github.com/anckursingh/engineering-intelligence/internal/github"
@@ -193,5 +195,96 @@ func TestSyncRateLimitRetry(t *testing.T) {
 	}
 	if res.Counts["Organization"].New != 1 {
 		t.Errorf("org not synced after retry: %+v", res.Counts["Organization"])
+	}
+}
+
+// §13.1: retry backoff must be context-interruptible — a cancelled sync
+// returns promptly instead of sleeping out the backoff window.
+func TestSyncContextCancelDuringRetry(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.FailOrgAlways()
+	cfg := w.SyncConfig(t.TempDir(), knowledge.NewMemory())
+	cfg.Sleep = nil // real sleep: the interruptible path under test
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := github.Sync(ctx, cfg)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for w.OrgCalls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("sync did not return promptly after cancel (backoff not interruptible)")
+	}
+}
+
+// §13.3: the merge-commit model must not assume one merge kind. Squash and
+// rebase merges put the resulting commit on the default branch, so the same
+// history lookup finds them; an unavailable merge SHA must leave no edge,
+// not fail the run.
+func TestMergeCommitModel(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddMergeVariants()
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ pr, sha string }{
+		{"4", githubtest.SquashSha},
+		{"5", githubtest.RebaseSha},
+	} {
+		pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#"+c.pr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelMergedAs), knowledge.Outbound, 1,
+			"github.com:commit:acme/widgets@"+c.sha)
+	}
+	pr6, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), pr6.Koid, string(ontology.RelMergedAs), knowledge.Outbound, 1)
+	if err != nil || len(got) != 0 {
+		t.Errorf("unavailable merge commit must leave no edge: %+v, %v", got, err)
+	}
+}
+
+// §13.4: PR-body regex is the fallback linking path — duplicate references
+// collapse to one edge, and a reference to a nonexistent issue skips the
+// link without failing the run. (Authoritative linking data — GitHub
+// GraphQL ClosingIssuesReferences — joins when metrics need it.)
+func TestPRToIssueLinks(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddLinkVariants()
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	dup, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), dup.Koid, string(ontology.RelImplements), knowledge.Outbound, 1)
+	if err != nil || len(got) != 1 {
+		t.Errorf("duplicate references must collapse to one edge: %+v, %v", got, err)
+	}
+	missing, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Traverse(context.Background(), missing.Koid, string(ontology.RelImplements), knowledge.Outbound, 1)
+	if err != nil || len(got) != 0 {
+		t.Errorf("nonexistent referenced issue must leave no edge: %+v, %v", got, err)
 	}
 }

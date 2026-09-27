@@ -23,10 +23,14 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 )
 
-// Fixture SHAs (the acme/widgets default branch).
+// Fixture SHAs (the acme/widgets default branch). Squash/Rebase are the
+// merge-kind variants (§13.3); Dead is a merge SHA absent from history.
 var (
-	ShaA = strings.Repeat("a", 40)
-	ShaB = strings.Repeat("b", 40)
+	ShaA      = strings.Repeat("a", 40)
+	ShaB      = strings.Repeat("b", 40)
+	SquashSha = strings.Repeat("c", 40)
+	RebaseSha = strings.Repeat("d", 40)
+	DeadSha   = strings.Repeat("e", 40)
 )
 
 func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
@@ -204,6 +208,73 @@ func (w *World) AddDeltaActivity() {
 	})
 }
 
+// AddMergeVariants appends the §13.3 merge-kind PRs: #4 squash merge, #5
+// rebase merge (both land their commit on the default branch), #6 a merged
+// PR whose merge SHA is not in branch history.
+func (w *World) AddMergeVariants() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	w.commits = append(w.commits,
+		&gh.RepositoryCommit{
+			SHA:     strptr(SquashSha),
+			HTMLURL: strptr("https://github.com/acme/widgets/commit/" + SquashSha),
+			Author:  &gh.User{Login: strptr("ann")},
+			Commit: &gh.Commit{
+				Message: strptr("squashed wobble fix"),
+				Author:  &gh.CommitAuthor{Name: strptr("Ann Coder"), Email: strptr("1234567+ann@users.noreply.github.com"), Date: tst(t0)},
+			},
+		},
+		&gh.RepositoryCommit{
+			SHA:     strptr(RebaseSha),
+			HTMLURL: strptr("https://github.com/acme/widgets/commit/" + RebaseSha),
+			Author:  &gh.User{Login: strptr("ann")},
+			Commit: &gh.Commit{
+				Message: strptr("rebased wobble fix"),
+				Author:  &gh.CommitAuthor{Name: strptr("Ann Coder"), Email: strptr("1234567+ann@users.noreply.github.com"), Date: tst(t0.Add(time.Hour))},
+			},
+		},
+	)
+	for i, sha := range []string{SquashSha, RebaseSha, DeadSha} {
+		w.prs = append(w.prs, &gh.PullRequest{
+			Number:         intptr(4 + i),
+			Title:          strptr("Merge variant"),
+			State:          strptr("closed"),
+			Merged:         boolptr(true),
+			User:           &gh.User{Login: strptr("ann")},
+			Base:           &gh.PullRequestBranch{Ref: strptr("main")},
+			Head:           &gh.PullRequestBranch{Ref: strptr("variant/branch")},
+			MergeCommitSHA: strptr(sha),
+			HTMLURL:        strptr("https://github.com/acme/widgets/pull/" + strconv.Itoa(4+i)),
+			CreatedAt:      tst(t0.Add(2 * time.Hour)),
+			UpdatedAt:      tst(t0.Add(3 * time.Hour)),
+			MergedAt:       tst(t0.Add(3 * time.Hour)),
+		})
+	}
+}
+
+// AddLinkVariants appends the §13.4 linking PRs: #7 references one issue
+// twice, #8 references an issue that does not exist.
+func (w *World) AddLinkVariants() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	for i, body := range []string{"Closes #2, fixes #2", "Closes #99"} {
+		w.prs = append(w.prs, &gh.PullRequest{
+			Number:    intptr(7 + i),
+			Title:     strptr("Link variant"),
+			Body:      strptr(body),
+			State:     strptr("open"),
+			User:      &gh.User{Login: strptr("ann")},
+			Base:      &gh.PullRequestBranch{Ref: strptr("main")},
+			Head:      &gh.PullRequestBranch{Ref: strptr("variant/branch")},
+			HTMLURL:   strptr("https://github.com/acme/widgets/pull/" + strconv.Itoa(7+i)),
+			CreatedAt: tst(t0.Add(2 * time.Hour)),
+			UpdatedAt: tst(t0.Add(3 * time.Hour)),
+		})
+	}
+}
+
 // FailFirstOrgCallOnce makes the first org call return a 403 rate-limit
 // response (the retry test).
 func (w *World) FailFirstOrgCallOnce() {
@@ -282,8 +353,12 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		encode(rw, w.issue1)
 	case r.URL.Path == "/repos/acme/widgets/pulls":
 		encode(rw, w.prs)
-	case r.URL.Path == "/repos/acme/widgets/pulls/3/reviews":
-		encode(rw, w.reviews)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/pulls/") && strings.HasSuffix(r.URL.Path, "/reviews"):
+		if r.URL.Path == "/repos/acme/widgets/pulls/3/reviews" {
+			encode(rw, w.reviews)
+			return
+		}
+		encode(rw, []*gh.PullRequestReview{})
 	default:
 		http.NotFound(rw, r)
 	}

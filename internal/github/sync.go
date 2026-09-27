@@ -451,10 +451,18 @@ func (s *syncer) syncPRIssues(owner, repo, prKoid string, pr ontology.PullReques
 
 		koid, ok := s.issueKoids[num]
 		if !ok {
+			// Body regex is the fallback path (§13.4); authoritative linking
+			// data joins with GraphQL ClosingIssuesReferences when metrics
+			// need it. A referenced issue that no longer exists (deleted or
+			// private) is not an error — the reference just yields no edge.
 			i, _, err := retry(s.ctx, s.client, "issues.get", func() (*gh.Issue, *gh.Response, error) {
 				return s.client.gh.Issues.Get(s.ctx, owner, repo, num)
 			})
 			if err != nil {
+				var ghErr *gh.ErrorResponse
+				if errors.As(err, &ghErr) && ghErr.Response.StatusCode == http.StatusNotFound {
+					continue
+				}
 				return fmt.Errorf("github: refetch issue %s/%s#%d: %w", owner, repo, num, err)
 			}
 			issueOnt := toIssue(i, owner, repo)

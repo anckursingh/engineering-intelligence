@@ -62,6 +62,13 @@ Every persisted relationship type is a data contract — do not rename casually.
 
 PASSED (PullRequest → Build) is reserved until Build fetch lands.
 
+## Connector hardening (§13)
+
+- [x] 13.1 context-interruptible retry backoff — `TestSyncContextCancelDuringRetry` (cancel mid-backoff returns promptly, `errors.Is(err, context.Canceled)`); the test seam (`cfg.Sleep`) stays non-interruptible by design, production uses timer+select
+- [x] 13.2 incremental ingestion design — deferred: full-list polling stays until webhooks/events + cursor + reconciliation have equivalent acceptance coverage (do not build first)
+- [x] 13.3 merge commit model — `TestMergeCommitModel`: squash and rebase merges land their commit on the default branch (one MERGED_AS edge via the same history lookup); unavailable merge SHA leaves no edge, no error. PR→commits/head-commit/resulting-branch-state modeling joins when metrics need it
+- [x] 13.4 PR→issue linking — `TestPRToIssueLinks`: duplicate body references collapse to one IMPLEMENTS edge; a referenced issue that no longer exists (404) skips the link without failing the run. Authoritative linking data (GraphQL ClosingIssuesReferences) deferred — regex is fallback-only until it lands
+
 Live-server spawn helper extracted to `internal/knowledge/aikoqltest.Live(t)` (used by contract, acceptance, ingestion, benchmarks).
 
 Store-specific guarantees (Memory only, not portable): provenance-only change never bumps version.
@@ -101,8 +108,8 @@ AikoqlStore with `AIKOQL_MCP_BIN` set via `-run TestAcceptanceSlice1Aikoql`)
 - [x] network timeout / ctx cancellation mid-call — ctx pre-checks on all five ops; SDK projects deadlines onto the socket
 - [x] partial source failure — ingestion.Run.Apply: first failure = *PartialFailure, prior elements persist, re-apply compensates
 - [x] process restart — TestAikoqlRestartPersistence (same dbDir, fresh server, data + traversal intact)
-- [ ] checkpoint corruption — add with ingestion hardening
-- [ ] duplicate / out-of-order event — add with ingestion hardening
+- [ ] checkpoint corruption — add when a second consumer shares the checkpoint (Jira)
+- [ ] duplicate / out-of-order event — lands with §13.2 event-driven ingestion (webhooks); current polling model cannot observe out-of-order events
 
 Invariant: **never advance a committed checkpoint beyond data that has not been durably persisted.**
 

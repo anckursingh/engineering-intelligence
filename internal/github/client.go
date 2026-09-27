@@ -32,7 +32,7 @@ func NewClient(token string, httpClient *http.Client) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("github: new client: %w", err)
 	}
-	return &Client{gh: c, sleep: time.Sleep}, nil
+	return &Client{gh: c}, nil
 }
 
 const maxRetries = 3
@@ -79,17 +79,25 @@ func retry[T any](ctx context.Context, c *Client, name string, fn func() (T, *gh
 	}
 }
 
+// sleepCtx blocks for d unless the context ends first (§13.1).
 func (c *Client) sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		d = time.Second
 	}
-	if c.sleep == nil {
-		c.sleep = time.Sleep
+	if c.sleep != nil {
+		// ponytail: the test seam is the delay itself; a canceled ctx is
+		// noticed only after the sleep. Production never takes this branch.
+		c.sleep(d)
+		return ctx.Err()
 	}
-	// ponytail: c.sleep (test seam) is the delay itself; a canceled ctx is
-	// noticed only after the sleep — the CLI exits a moment late, not wrong.
-	c.sleep(d)
-	return ctx.Err()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // paginate pages through any list call with page size 100.
