@@ -23,7 +23,7 @@ Phase 1A (GitHub slice): done. Working: Phase 1B (contract freeze).
 - [x] 4. Implement AIKOQL client — `internal/knowledge/aikoql.go` (AikoqlStore over a thin `aikoqlDB` CallTool surface); transport errors never leak past `knowledge` errors
 - [x] 5. Add AikoqlStore — passes the same contract suite (11/11 live) + restart persistence
 - [x] 6. Run GitHub acceptance suite against AikoqlStore — suite parametrized on a StoreFactory; all 6 ACs green on Memory AND live AikoqlStore (TestAcceptanceSlice1Aikoql)
-- [ ] 7. Add tenant-scoped identity — (tenant, source, external_id) never collide; isolation tests (§8)
+- [x] 7. Add tenant-scoped identity — `knowledge.WithTenant`: (tenant, source, external_id) never collide; tenant contract 4/4 on Memory AND live AikoqlStore; sync-level resolution test (§8); no UI/auth added
 - [ ] 8. Add ingestion application layer — `internal/ingestion` (§10–12): mutation model + atomicity, relationship vocabulary finalized
 - [ ] 9. Refactor GitHub connector through the ingestion layer
 - [ ] 10. Harden GitHub incremental sync — ctx-aware retry, merge-commit model, authoritative PR→issue links (§13)

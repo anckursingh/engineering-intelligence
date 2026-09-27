@@ -28,6 +28,7 @@ type Config struct {
 	HTTPClient     *http.Client             // test seam: transport that redirects to httptest
 	Sleep          func(time.Duration)      // test seam; nil = real sleep
 	Store          knowledge.KnowledgeStore // nil = in-memory dev store
+	Tenant         string                   // optional: scopes the store to one tenant (§8)
 }
 
 // Count tallies one entity type over a run.
@@ -163,6 +164,9 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 	store := cfg.Store
 	if store == nil {
 		store = knowledge.NewMemory()
+	}
+	if cfg.Tenant != "" {
+		store = knowledge.WithTenant(store, cfg.Tenant)
 	}
 	s := &syncer{
 		ctx:         ctx,

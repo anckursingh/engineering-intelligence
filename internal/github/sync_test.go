@@ -126,6 +126,59 @@ func TestSyncRun2Delta(t *testing.T) {
 	}
 }
 
+// §8: identity resolution is tenant-scoped — the same source identity
+// observed under two tenants resolves to two distinct engineers, and each
+// tenant's graph never exposes the other's objects.
+func TestTenantScopedIdentityResolution(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	base := knowledge.NewMemory()
+	cfgA := w.SyncConfig(t.TempDir(), base)
+	cfgA.Tenant = "tenant-a"
+	cfgB := w.SyncConfig(t.TempDir(), base)
+	cfgB.Tenant = "tenant-b"
+	if _, err := github.Sync(context.Background(), cfgA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := github.Sync(context.Background(), cfgB); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	ta := knowledge.WithTenant(base, "tenant-a")
+	tb := knowledge.WithTenant(base, "tenant-b")
+	ea, err := ta.GetByExternalID(ctx, "github.com:email:bob@corp.example")
+	if err != nil {
+		t.Fatalf("tenant-a engineer: %v", err)
+	}
+	eb, err := tb.GetByExternalID(ctx, "github.com:email:bob@corp.example")
+	if err != nil {
+		t.Fatalf("tenant-b engineer: %v", err)
+	}
+	if ea.Koid == eb.Koid {
+		t.Error("same identity under two tenants must resolve to two engineers")
+	}
+	for _, e := range []knowledge.KnowledgeObject{ea, eb} {
+		if e.Properties["identity_key"] != "email:bob@corp.example" {
+			t.Errorf("identity_key = %v, want email:bob@corp.example", e.Properties["identity_key"])
+		}
+	}
+
+	// Each tenant's PR graph reaches its own reviewer only: same rel type,
+	// same login, different scopes.
+	pa, err := ta.GetByExternalID(ctx, "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, ta, pa.Koid, string(ontology.RelReviewedBy), knowledge.Outbound, 1, "github.com:user:ann")
+	got, err := ta.Traverse(ctx, pa.Koid, string(ontology.RelReviewedBy), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("tenant-a reviewers = %d objects, want 1 (cross-tenant leak)", len(got))
+	}
+}
+
 func TestSyncRateLimitRetry(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	w.FailFirstOrgCallOnce()

@@ -44,6 +44,13 @@ func TestAikoqlContract(t *testing.T) {
 	knowledgetest.RunContract(t, liveStore)
 }
 
+// Tenant scoping (§8) on the real store: the server's idempotency index is
+// global and type-blind, so tenant collision-freedom is the adapter+wrapper's
+// job — this must hold against the live server, not just Memory.
+func TestAikoqlTenantContract(t *testing.T) {
+	knowledgetest.RunTenantContract(t, liveStore)
+}
+
 // Phase 1E (§7): persistence across process restart — data written by one
 // server process must be visible to a fresh one on the same database.
 func TestAikoqlRestartPersistence(t *testing.T) {

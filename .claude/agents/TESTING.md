@@ -32,6 +32,17 @@ Suite: `internal/knowledge/knowledgetest.RunContract`. Every store is graded aga
 
 AikoqlStore grading runs live per-test servers (`AIKOQL_MCP_BIN`, stdio, no ports/token); it skips offline.
 
+Tenant scoping (§8), suite `knowledgetest.RunTenantContract` — `knowledge.WithTenant(store, tenant)` namespaces external IDs + rel types, strips the prefix on read-back:
+
+| Behavior | Memory | AikoqlStore |
+|---|---|---|
+| same identity in two tenants → two objects | ✓ | ✓ |
+| same-tenant upsert idempotent | ✓ | ✓ |
+| cross-tenant traversal isolated | ✓ | ✓ |
+| bare store never sees tenant data | ✓ | ✓ |
+
+Identity resolution tenant-scoped at the sync layer: `TestTenantScopedIdentityResolution` (two tenants over one store, same email → two engineers; PR graph stays in-scope). `github.Config.Tenant` wraps the store per run; empty tenant = zero behavior change.
+
 Store-specific guarantees (Memory only, not portable): provenance-only change never bumps version.
 
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)

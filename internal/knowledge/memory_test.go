@@ -30,6 +30,14 @@ func TestMemoryContract(t *testing.T) {
 	})
 }
 
+// Tenant scoping (§8) is graded on Memory too; the wrapper is store-agnostic.
+func TestMemoryTenantContract(t *testing.T) {
+	knowledgetest.RunTenantContract(t, func(t *testing.T) knowledge.KnowledgeStore {
+		t.Helper()
+		return knowledge.NewMemory()
+	})
+}
+
 // Store-specific guarantee beyond the portable contract: provenance-only
 // changes never bump the version (ObservedAt changes every run) — content
 // identity is the property payload.
