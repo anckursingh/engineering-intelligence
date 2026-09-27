@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/anckursingh/engineering-intelligence/internal/evidence"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
@@ -43,13 +44,6 @@ type Definition struct {
 	Limitations []string
 }
 
-// Evidence cites the objects an observation is computed from — the lineage a
-// future explanation reads (item 15 extends this with epistemic states).
-type Evidence struct {
-	TypeName   string `json:"type_name"`
-	ExternalID string `json:"external_id"`
-}
-
 // Window is the half-open event-time window [Start, End) a metric answers
 // for. Start >= End yields no observations.
 type Window struct {
@@ -58,13 +52,14 @@ type Window struct {
 }
 
 // Observation is one deterministic metric value. Value is days for duration
-// metrics and a count for throughput.
+// metrics and a count for throughput. Evidence cites the objects the value
+// was computed from (§20) with state CALCULATED (§21).
 type Observation struct {
-	Metric   string     `json:"metric"`
-	Value    float64    `json:"value"`
-	Entity   string     `json:"entity,omitempty"` // per-entity observations (cycle time, review latency)
-	Window   Window     `json:"window"`
-	Evidence []Evidence `json:"evidence"`
+	Metric   string              `json:"metric"`
+	Value    float64             `json:"value"`
+	Entity   string              `json:"entity,omitempty"` // per-entity observations (cycle time, review latency)
+	Window   Window              `json:"window"`
+	Evidence []evidence.Evidence `json:"evidence"`
 }
 
 // Definitions of the implemented metrics (§17: flow first — the set that has
@@ -127,8 +122,8 @@ func CycleTime(pop Population, w Window) []Observation {
 			Value:  e.Value.MergedAt.Sub(e.Value.CreatedAt).Hours() / 24,
 			Entity: e.ExternalID,
 			Window: w,
-			Evidence: []Evidence{
-				{TypeName: "PullRequest", ExternalID: e.ExternalID},
+			Evidence: []evidence.Evidence{
+				{Type: "PullRequest", ObjectIDs: []string{e.ExternalID}, State: evidence.StateCalculated},
 			},
 		})
 	}
@@ -180,9 +175,9 @@ func ReviewLatency(pop Population, w Window) []Observation {
 			Value:  first.at.Sub(e.Value.CreatedAt).Hours() / 24,
 			Entity: e.ExternalID,
 			Window: w,
-			Evidence: []Evidence{
-				{TypeName: "PullRequest", ExternalID: e.ExternalID},
-				{TypeName: "Review", ExternalID: first.extID},
+			Evidence: []evidence.Evidence{
+				{Type: "PullRequest", ObjectIDs: []string{e.ExternalID}, State: evidence.StateCalculated},
+				{Type: "Review", ObjectIDs: []string{first.extID}, State: evidence.StateCalculated},
 			},
 		})
 	}
@@ -197,22 +192,24 @@ func Throughput(pop Population, w Window) []Observation {
 		return nil
 	}
 	seen := map[string]bool{}
-	var evidence []Evidence
+	var ids []string
 	for _, e := range pop.PullRequests {
 		if seen[e.ExternalID] || !valid(e.Value) || e.Value.MergedAt.Before(w.Start) || !e.Value.MergedAt.Before(w.End) {
 			continue
 		}
 		seen[e.ExternalID] = true
-		evidence = append(evidence, Evidence{TypeName: "PullRequest", ExternalID: e.ExternalID})
+		ids = append(ids, e.ExternalID)
 	}
-	if len(evidence) == 0 {
+	if len(ids) == 0 {
 		return nil
 	}
-	sort.Slice(evidence, func(i, j int) bool { return evidence[i].ExternalID < evidence[j].ExternalID })
+	sort.Strings(ids)
 	return []Observation{{
-		Metric:   DefThroughput.Name,
-		Value:    float64(len(evidence)),
-		Window:   w,
-		Evidence: evidence,
+		Metric: DefThroughput.Name,
+		Value:  float64(len(ids)),
+		Window: w,
+		Evidence: []evidence.Evidence{
+			{Type: "PullRequest", ObjectIDs: ids, State: evidence.StateCalculated},
+		},
 	}}
 }

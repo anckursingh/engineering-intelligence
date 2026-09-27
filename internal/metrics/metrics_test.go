@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anckursingh/engineering-intelligence/internal/evidence"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
@@ -68,8 +69,14 @@ func TestCycleTimeExactValue(t *testing.T) {
 	if got[0].Entity != "github.com:pr:acme/widgets#1" {
 		t.Errorf("entity = %q", got[0].Entity)
 	}
-	if len(got[0].Evidence) != 1 || got[0].Evidence[0].ExternalID != "github.com:pr:acme/widgets#1" {
+	if len(got[0].Evidence) != 1 || len(got[0].Evidence[0].ObjectIDs) != 1 || got[0].Evidence[0].ObjectIDs[0] != "github.com:pr:acme/widgets#1" {
 		t.Errorf("evidence = %v, want the PR", got[0].Evidence)
+	}
+	if got[0].Evidence[0].Type != "PullRequest" {
+		t.Errorf("evidence type = %q, want PullRequest", got[0].Evidence[0].Type)
+	}
+	if got[0].Evidence[0].State != evidence.StateCalculated {
+		t.Errorf("evidence state = %q, want CALCULATED (§21: deterministic math over observed objects)", got[0].Evidence[0].State)
 	}
 }
 
@@ -182,7 +189,9 @@ func TestReviewLatencyExactValue(t *testing.T) {
 	}
 	ids := map[string]bool{}
 	for _, e := range got[0].Evidence {
-		ids[e.ExternalID] = true
+		for _, id := range e.ObjectIDs {
+			ids[id] = true
+		}
 	}
 	if !ids["github.com:review:acme/widgets#1@1001"] || !ids["github.com:pr:acme/widgets#1"] {
 		t.Errorf("evidence = %v, want the PR and its first review", got[0].Evidence)
@@ -235,8 +244,8 @@ func TestThroughputExactValue(t *testing.T) {
 	if got[0].Value != 2.0 {
 		t.Errorf("throughput = %v, want 2.0", got[0].Value)
 	}
-	if len(got[0].Evidence) != 2 {
-		t.Errorf("evidence = %v, want the two counted PRs", got[0].Evidence)
+	if len(got[0].Evidence) != 1 || len(got[0].Evidence[0].ObjectIDs) != 2 {
+		t.Errorf("evidence = %v, want one entry citing the two counted PRs", got[0].Evidence)
 	}
 }
 

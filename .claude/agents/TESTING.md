@@ -98,11 +98,20 @@ Suite: `internal/identity` (resolver unit tests) + acceptance AC-ID-001/002/003 
 
 Suite: `internal/metrics`. Pure functions of a `Population{Entity[T]}` — no store, no I/O, no context: the same population always yields the same values (reproducible). Investigations (item 17) own the traversal that builds a population.
 
-- Types per §16: `Definition` (name/formula/population/window/sources/filters/aggregation/limitations), `Observation` (value/entity/window/evidence), `Window` (half-open `[Start, End)`, inverted → empty), `Population`, `Evidence` (type + external ID; item 15 extends it with epistemic states).
+- Types per §16: `Definition` (name/formula/population/window/sources/filters/aggregation/limitations), `Observation` (value/entity/window/evidence), `Window` (half-open `[Start, End)`, inverted → empty), `Population`, `evidence.Evidence` (§20 generic representation, metrics stamp it State CALCULATED).
 - First metrics (flow set with data): `cycle_time` (merged − created, per PR, anchored at merged_at), `review_latency` (earliest valid review's submitted_at − created_at, per PR, anchored at created_at, evidence = PR + first review), `throughput` (count of merged PRs per window, evidence = every counted PR). Deployment frequency, CI failure rate, rework, AI metrics: deferred until their sources exist (no deployment/Build data).
 - Temporal semantics (§19): event times ONLY — created/merged/submitted, never `updated_at`/`observed_at`. The doc's example is pinned verbatim (`TestCycleTimeExactValue`): created 09-01, merged 09-05, ingested 09-08 → 4.0 days. A source update after the window end never excludes an in-window event (`late-arriving event` case).
 - §18 edge suite (`TestCycleTimeEdges`, `TestReviewLatencyEdges`, `TestThroughputEmptyWindow`, `TestCycleTimeDuplicateEvent`, `TestCycleTimeTimezoneBoundary`): empty population → empty; missing created/merged/submitted → excluded; unmerged → excluded; merged before created (out-of-order) → excluded as a data error; merged at window start included, at window end excluded (half-open); duplicates collapse by external ID; instants compared across zones (NY/Tokyo), not wall clocks.
 - Invalid data never errors — it is excluded by the documented filters; every exclusion rule appears in the metric's `Definition.Filters`.
+
+## Evidence model (§20–21)
+
+Suite: `internal/evidence` (external package — metrics imports evidence, so the package-internal tests can't live inside it) + the metric evidence assertions.
+
+- `Evidence` is the generic representation (§20): Type, Source, SourceURL, ObjectIDs, ObservedAt, Confidence, State. ObjectIDs are the reconstruction handle — they must resolve back through the store.
+- `State` (§21): OBSERVED / CALCULATED / INFERRED / HYPOTHESIZED, never collapsed (`TestStatesDistinctAndOrdered` pins distinctness + `Strength()` order: observed 0 < calculated 1 < inferred 2 < hypothesized 3, unknown 4).
+- No generated explanation text is the source of truth — `TestExplanationReconstructs` pins the §20 rule: persist the source objects, compute cycle time, re-read every cited ObjectID from the store, rebuild the population, recompute → identical value. Every insight's explanation reconstructs from source objects + deterministic calculations.
+- Metrics stamp what they are: `State=StateCalculated`, Type = ontology type, ObjectIDs = the objects computed from (cycle time cites the PR; review latency the PR + first review; throughput one entry citing every counted PR). OBSERVED evidence joins when a connector emits it; investigations (item 16) own the rest of the state ladder.
 
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
