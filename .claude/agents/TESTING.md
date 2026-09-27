@@ -94,6 +94,16 @@ Suite: `internal/identity` (resolver unit tests) + acceptance AC-ID-001/002/003 
 - **Live-budget note**: the aikoql stdio server caps ~120 calls/min per process, and the identity ACs' full-world syncs exceed it — so AC-ID-001/003 run the lean `githubtest.NewIdentityWorld` (org + repo + two commits: ann via noreply, bob via email). Before adding objects to that world, re-run the live leg (`AIKOQL_MCP_BIN` + `-run TestAcceptanceSlice1Aikoql`). Full-world identity behavior remains pinned by AC-KG-004/AC-ID-002 and the resolver suite.
 - No issue→engineer edges yet (ponytail): the vocabulary grows a rel when metrics need "who works on what".
 
+## Deterministic metric engine (§16–19)
+
+Suite: `internal/metrics`. Pure functions of a `Population{Entity[T]}` — no store, no I/O, no context: the same population always yields the same values (reproducible). Investigations (item 17) own the traversal that builds a population.
+
+- Types per §16: `Definition` (name/formula/population/window/sources/filters/aggregation/limitations), `Observation` (value/entity/window/evidence), `Window` (half-open `[Start, End)`, inverted → empty), `Population`, `Evidence` (type + external ID; item 15 extends it with epistemic states).
+- First metrics (flow set with data): `cycle_time` (merged − created, per PR, anchored at merged_at), `review_latency` (earliest valid review's submitted_at − created_at, per PR, anchored at created_at, evidence = PR + first review), `throughput` (count of merged PRs per window, evidence = every counted PR). Deployment frequency, CI failure rate, rework, AI metrics: deferred until their sources exist (no deployment/Build data).
+- Temporal semantics (§19): event times ONLY — created/merged/submitted, never `updated_at`/`observed_at`. The doc's example is pinned verbatim (`TestCycleTimeExactValue`): created 09-01, merged 09-05, ingested 09-08 → 4.0 days. A source update after the window end never excludes an in-window event (`late-arriving event` case).
+- §18 edge suite (`TestCycleTimeEdges`, `TestReviewLatencyEdges`, `TestThroughputEmptyWindow`, `TestCycleTimeDuplicateEvent`, `TestCycleTimeTimezoneBoundary`): empty population → empty; missing created/merged/submitted → excluded; unmerged → excluded; merged before created (out-of-order) → excluded as a data error; merged at window start included, at window end excluded (half-open); duplicates collapse by external ID; instants compared across zones (NY/Tokyo), not wall clocks.
+- Invalid data never errors — it is excluded by the documented filters; every exclusion rule appears in the metric's `Definition.Filters`.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
