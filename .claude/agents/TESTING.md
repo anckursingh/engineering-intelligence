@@ -124,6 +124,16 @@ Suite: `internal/intelligence`. The first investigation, "Why did cycle time cha
 - Edges: primary unchanged → "Cycle time did not change (X days).", no factors; primary missing in a window → "Not enough cycle_time data in <name> to investigate." (a result, not an error).
 - State = StateCalculated; Confidence = 1.0 — certainty of the arithmetic; the limitations field states it is not a causal link.
 
+## Investigation API (§24)
+
+Suite: `internal/intelligence` (`population_test.go`, `api_test.go`; Memory + live AikoqlStore).
+
+- `Population(ctx, store, scope)` is the §22 graph step: resolve the org external ID → koid, then walk `BELONGS_TO` inbound (org → repos), `TARGETS` inbound (repo → PRs), `CONTAINS_REVIEW` outbound (PR → reviews); typed values recover via the same JSON round-trip the §20 reconstruction test uses. Org scope only (`ponytail:` repo scoping joins when a question needs it).
+- `NewAPI(store)` serves the §24 endpoints via stdlib pattern routing (Go 1.22+): GET /health; GET /metrics and GET /metrics/{metric} (definitions; value queries go through investigations); POST /investigations `{scope, window_a, window_b, question?}` — 400 on malformed body, bad RFC3339 window, missing scope, or any question other than the first one; GET /investigations/{id} — results kept in memory (deterministic recompute; persist when a restarting server has a client).
+- Response is §24's structured shape, not only prose: primary/factors each carry `metric/window/value/comparison/change/epistemic_state/evidence`; `change` is the doc's fraction (ChangePct/100 — 1.0 for 2→4). Plus `id/question/statement/limitations`.
+- Pinned by `TestAPIInvestigationEndpoints` (the full §23 statement through the HTTP layer), `TestAPIMetricsAndHealth`, `TestAPIBadRequests`, `TestPopulationFromScope`, `TestPopulationScopeIsolation`, and live legs `TestPopulationLiveAikoql` / `TestAPIInvestigationLiveAikoql`.
+- Fixture gotcha (hit and fixed): sections of a fixture must use disjoint PR numbers — external IDs collide otherwise and upserts overwrite the other window's objects.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
