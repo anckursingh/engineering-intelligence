@@ -155,6 +155,17 @@ Suite: `internal/metrics` (`ai_test.go`, package-internal) + the investigation f
 - Investigation wiring: `RelAIContributes` (CodeContribution → PullRequest, inbound walk in `Population`) brings contributions into the org-scoped graph; `ai_assisted_pr_pct` is a candidate factor — `TestCycleTimeChangeAIFactor` pins the statement gain ("AI-assisted PR percentage changed from 0.0 to 100.0 %." — the From==0 rule renders a percentage without a %-of-%), `TestCycleTimeChangeAIFlatExcluded` pins that a flat share is not listed. GET /metrics now returns 4 definitions (the API test tracks the candidate table).
 - Deferred (documented): AI-related rework (no rework signal in any source); run/task/interaction metrics as investigation factors (telemetry objects carry no org/repo edge — a connector that links them joins the candidates then; the metrics themselves are ready and tested).
 
+## Product board (§28)
+
+Suite: `internal/intelligence` (`board_test.go`; Memory + live AikoqlStore).
+
+- GET /board?scope=<extID>&start=<RFC3339>&end=<RFC3339> returns the doc's five sections in order: Engineering Flow, Quality, Reliability, AI Development, Evidence Coverage (`TestBoardSections` pins order + titles).
+- Engineering Flow = window means of cycle_time / review_latency / throughput; AI Development = ai_assisted_pr_pct. Every item carries `metric/label/value/unit/epistemic_state/evidence` — the same calculated-evidence discipline as investigations.
+- Honest absence: Quality ("no CI source ingested yet") and Reliability ("no deployment or incident data") are static notes — never fabricated numbers; a window with no data returns the same five sections with notes (`TestBoardEmptyWindow`); coverage with nothing to cover carries a note.
+- Evidence Coverage = per epistemic state present, the count of distinct objects backing it (§28 "how strong is the evidence" as object counts, not a confidence score).
+- No individual ranking (`TestBoardNoIndividualRanking`) — by construction: items cite only PR/review/contribution objects. Check structurally (no `Engineer`/`SourceIdentity` evidence types, no identity keys) — the word "Engineering" trips a substring check on the doc's own title.
+- Unknown scope → 400 (a navigation typo; POST /investigations keeps 500 — there scope comes from a request body). "What changed / why" stays the investigations endpoint's job.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
