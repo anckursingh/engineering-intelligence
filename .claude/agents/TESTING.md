@@ -144,6 +144,17 @@ Suite: `internal/ontology` (`ai_test.go`; package-internal, Memory-store-agnosti
 - §26 attribution is evidence-based (`TestAttributionValidate` pins 7 cases): `Attribution{Level, Source, Evidence, AttributedAt}`; DIRECT and STRONG require a named telemetry source AND an evidence reference — a bare DIRECT claim is invalid. INFERRED/UNKNOWN are valid without them. There is NO function that derives attribution from code style; UNKNOWN stays UNKNOWN until telemetry says otherwise.
 - No connector in this item — no real telemetry source exists to connect; PR-linking rels join when item 19's AI metrics need them.
 
+## AI development metrics (§27)
+
+Suite: `internal/metrics` (`ai_test.go`, package-internal) + the investigation factor tests.
+
+- Eight metrics, pure functions of the Population's AI telemetry, event times only (§19): `ai_assisted_pr_pct` (merged PRs with ≥1 valid DIRECT/STRONG contribution / merged PRs × 100, anchored merged_at), `ai_interaction_volume` / `ai_run_volume` (counts anchored started_at), `ai_task_completion` / `human_intervention_rate` / `retry_rate` (shares over finished tasks — completed_at in window, status completed|failed; pending tasks have no event time and are excluded), `ai_cost` (sum cost_usd over runs started in window), `cost_per_completed_task` (cost / tasks completed in window).
+- §26 counting is pinned (`TestAIAssistedPRPctAttributionFiltering`): only valid DIRECT/STRONG telemetry claims count — INFERRED, UNKNOWN, bare DIRECT (no source), wrong-repo and orphan contributions never count; a PR with only those shows 0.0, with PR-only evidence.
+- Honest absence: a window with no objects yields NO observation (source silence is unknown, not zero — `none()` helper); `cost_per_completed_task` with no runs or no completed tasks is absence, not zero. `ai_assisted_pr_pct` differs: merged PRs with zero qualifying contributions is a real 0.0 — that design keeps the §23 fixture's factor list at 2 (flat 0.0→0.0 is not a candidate).
+- §18 edges pinned per metric: exact values, empty population, missing event times, duplicate external IDs, and a timezone-boundary case (an interaction at 2026-09-30 23:30 UTC is September in New York, October in Tokyo — in-window either way, instants not wall clocks).
+- Investigation wiring: `RelAIContributes` (CodeContribution → PullRequest, inbound walk in `Population`) brings contributions into the org-scoped graph; `ai_assisted_pr_pct` is a candidate factor — `TestCycleTimeChangeAIFactor` pins the statement gain ("AI-assisted PR percentage changed from 0.0 to 100.0 %." — the From==0 rule renders a percentage without a %-of-%), `TestCycleTimeChangeAIFlatExcluded` pins that a flat share is not listed. GET /metrics now returns 4 definitions (the API test tracks the candidate table).
+- Deferred (documented): AI-related rework (no rework signal in any source); run/task/interaction metrics as investigation factors (telemetry objects carry no org/repo edge — a connector that links them joins the candidates then; the metrics themselves are ready and tested).
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:

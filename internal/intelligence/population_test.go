@@ -41,7 +41,8 @@ func relate(t *testing.T, store knowledge.KnowledgeStore, rel knowledge.Relation
 }
 
 // seedWorld builds the KG shape the population builder reads: org → repo →
-// two PRs (4d cycle each) → one review each.
+// two PRs (4d cycle each) → one review each; PR 1 also carries one DIRECT
+// AI contribution.
 func seedWorld(t *testing.T, store knowledge.KnowledgeStore) {
 	t.Helper()
 	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
@@ -61,6 +62,13 @@ func seedWorld(t *testing.T, store knowledge.KnowledgeStore) {
 			SubmittedAt: created.Add(24 * time.Hour),
 		}.KnowledgeObject, prov))
 		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsReview), From: prKO.Koid, To: revKO.Koid})
+		if n == 1 {
+			contribKO := upsert(t, store, mapKO(t, ontology.CodeContribution{
+				Repository: "acme/widgets", PRNumber: 1,
+				Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+			}.KnowledgeObject, prov))
+			relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contribKO.Koid, To: prKO.Koid})
+		}
 	}
 }
 
@@ -75,6 +83,12 @@ func TestPopulationFromScope(t *testing.T) {
 	}
 	if len(pop.PullRequests) != 2 || len(pop.Reviews) != 2 {
 		t.Fatalf("population = %d PRs, %d reviews, want 2/2", len(pop.PullRequests), len(pop.Reviews))
+	}
+	if len(pop.CodeContributions) != 1 {
+		t.Fatalf("population = %d AI contributions, want 1", len(pop.CodeContributions))
+	}
+	if c := pop.CodeContributions[0]; !strings.HasPrefix(c.ExternalID, "ei.com:ai-contribution:") || c.Value.Attribution.Level != ontology.AttributionDirect {
+		t.Errorf("contribution did not round-trip: %+v", c)
 	}
 	for _, e := range pop.PullRequests {
 		if !strings.HasPrefix(e.ExternalID, "github.com:pr:acme/widgets#") {
@@ -127,5 +141,8 @@ func TestPopulationLiveAikoql(t *testing.T) {
 	}
 	if len(pop.PullRequests) != 2 || len(pop.Reviews) != 2 {
 		t.Errorf("population = %d PRs, %d reviews, want 2/2", len(pop.PullRequests), len(pop.Reviews))
+	}
+	if len(pop.CodeContributions) != 1 {
+		t.Errorf("population = %d AI contributions, want 1", len(pop.CodeContributions))
 	}
 }

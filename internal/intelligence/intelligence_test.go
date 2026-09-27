@@ -192,3 +192,70 @@ func TestCycleTimeChangeFlatFactorsExcluded(t *testing.T) {
 		t.Errorf("statement = %q\nwant       %q", got.Statement, want)
 	}
 }
+
+// aiContrib builds a valid DIRECT contribution for a PR number.
+func aiContrib(extID string, prNum int) metrics.Entity[ontology.CodeContribution] {
+	return metrics.Entity[ontology.CodeContribution]{
+		ExternalID: extID,
+		Value: ontology.CodeContribution{
+			Repository: "acme/widgets", PRNumber: prNum,
+			Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+		},
+	}
+}
+
+// TestCycleTimeChangeAIFactor (§27): when the AI-assisted PR share moves
+// alongside cycle time it joins the candidate factors — same association,
+// same non-causality statement.
+func TestCycleTimeChangeAIFactor(t *testing.T) {
+	popA, a := monthA()
+	popB, b := monthB()
+	pop := metrics.Population{
+		PullRequests: append(append([]metrics.Entity[ontology.PullRequest]{}, popA.PullRequests...), popB.PullRequests...),
+		Reviews:      append(append([]metrics.Entity[ontology.Review]{}, popA.Reviews...), popB.Reviews...),
+		// No contributions in Month A; both Month B PRs DIRECT-attributed.
+		CodeContributions: []metrics.Entity[ontology.CodeContribution]{
+			aiContrib("ei.com:ai-contribution:claude-code:c4", 4),
+			aiContrib("ei.com:ai-contribution:claude-code:c5", 5),
+		},
+	}
+	got := CycleTimeChange(pop, a, b)
+	want := "Cycle time increased from 2.0 to 4.0 days. " +
+		"Review latency increased by 100.0%. " +
+		"Throughput decreased by 33.3%. " +
+		"AI-assisted PR percentage changed from 0.0 to 100.0 %. " +
+		"The data supports an association, but does not establish causality."
+	if got.Statement != want {
+		t.Errorf("statement = %q\nwant       %q", got.Statement, want)
+	}
+	if len(got.Factors) != 3 {
+		t.Fatalf("factors = %d, want 3", len(got.Factors))
+	}
+	if f := got.Factors[2]; f.Metric != "ai_assisted_pr_pct" || f.From != 0.0 || f.To != 100.0 {
+		t.Errorf("AI factor = %+v, want ai_assisted_pr_pct 0.0→100.0", f)
+	}
+}
+
+// TestCycleTimeChangeAIFlatExcluded: an unchanged AI-assisted share (100% in
+// both windows) is not a candidate factor.
+func TestCycleTimeChangeAIFlatExcluded(t *testing.T) {
+	popA, a := monthA()
+	popB, b := monthB()
+	pop := metrics.Population{
+		PullRequests: append(append([]metrics.Entity[ontology.PullRequest]{}, popA.PullRequests...), popB.PullRequests...),
+		Reviews:      append(append([]metrics.Entity[ontology.Review]{}, popA.Reviews...), popB.Reviews...),
+		CodeContributions: []metrics.Entity[ontology.CodeContribution]{
+			aiContrib("c1", 1), aiContrib("c2", 2), aiContrib("c3", 3), // Month A: 100%
+			aiContrib("c4", 4), aiContrib("c5", 5), // Month B: 100%
+		},
+	}
+	got := CycleTimeChange(pop, a, b)
+	if len(got.Factors) != 2 {
+		t.Errorf("factors = %d, want 2 — flat AI share is not a candidate", len(got.Factors))
+	}
+	for _, f := range got.Factors {
+		if f.Metric == "ai_assisted_pr_pct" {
+			t.Errorf("flat ai_assisted_pr_pct listed as factor: %+v", f)
+		}
+	}
+}

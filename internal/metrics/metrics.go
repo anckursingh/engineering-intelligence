@@ -26,8 +26,12 @@ type Entity[T any] struct {
 
 // Population is the object set a metric is computed over.
 type Population struct {
-	PullRequests []Entity[ontology.PullRequest]
-	Reviews      []Entity[ontology.Review]
+	PullRequests      []Entity[ontology.PullRequest]
+	Reviews           []Entity[ontology.Review]
+	CodeContributions []Entity[ontology.CodeContribution]
+	AgentRuns         []Entity[ontology.AgentRun]
+	AgentTasks        []Entity[ontology.AgentTask]
+	Interactions      []Entity[ontology.Interaction]
 }
 
 // Definition declares a metric per §16. The computation is a typed function;
@@ -103,11 +107,16 @@ func valid(pr ontology.PullRequest) bool {
 	return pr.Merged && !pr.CreatedAt.IsZero() && !pr.MergedAt.IsZero() && !pr.MergedAt.Before(pr.CreatedAt)
 }
 
+// windowEmpty reports an inverted or empty window — no observations possible.
+func windowEmpty(w Window) bool {
+	return w.End.Before(w.Start) || w.End.Equal(w.Start)
+}
+
 // CycleTime computes PR cycle time: merged - created, in days (§17, §19).
 // One observation per merged PR whose merged_at falls in the window;
 // duplicates collapse by external ID; results are ordered by external ID.
 func CycleTime(pop Population, w Window) []Observation {
-	if w.End.Before(w.Start) || w.End.Equal(w.Start) {
+	if windowEmpty(w) {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -136,7 +145,7 @@ func CycleTime(pop Population, w Window) []Observation {
 // created_at falls in the window and that has at least one valid review of
 // its own; duplicates collapse by external ID; ordered by PR external ID.
 func ReviewLatency(pop Population, w Window) []Observation {
-	if w.End.Before(w.Start) || w.End.Equal(w.Start) {
+	if windowEmpty(w) {
 		return nil
 	}
 	// Group valid reviews by their PR (repo + number), keeping the earliest
@@ -188,7 +197,7 @@ func ReviewLatency(pop Population, w Window) []Observation {
 // Throughput counts merged PRs whose merged_at falls in the window: one
 // observation per window with every counted PR in evidence (§17).
 func Throughput(pop Population, w Window) []Observation {
-	if w.End.Before(w.Start) || w.End.Equal(w.Start) {
+	if windowEmpty(w) {
 		return nil
 	}
 	seen := map[string]bool{}

@@ -135,8 +135,8 @@ func TestAPIMetricsAndHealth(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &defs); err != nil {
 		t.Fatal(err)
 	}
-	if len(defs) != 3 || defs[0].Name != "cycle_time" {
-		t.Errorf("definitions = %+v", defs)
+	if len(defs) != 4 || defs[0].Name != "cycle_time" {
+		t.Errorf("definitions = %+v, want the 3 flow metrics + ai_assisted_pr_pct", defs)
 	}
 
 	rec = httptest.NewRecorder()

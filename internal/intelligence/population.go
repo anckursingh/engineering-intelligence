@@ -14,9 +14,12 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
-// Population walks org → repos → PRs → reviews and returns the typed objects
-// with their store external IDs. ponytail: org scope only — repo scoping
-// joins when a question needs it.
+// Population walks org → repos → PRs → reviews + AI contributions and
+// returns the typed objects with their store external IDs.
+// ponytail: org scope only — repo scoping joins when a question needs it;
+// run/task/interaction metrics are unreachable here because telemetry
+// objects carry no org/repo edge — a telemetry connector that links them
+// joins the candidate set then.
 func Population(ctx context.Context, store knowledge.KnowledgeStore, scope string) (metrics.Population, error) {
 	var pop metrics.Population
 	org, err := store.GetByExternalID(ctx, scope)
@@ -48,6 +51,17 @@ func Population(ctx context.Context, store knowledge.KnowledgeStore, scope strin
 					return pop, fmt.Errorf("intelligence: decode review %s: %w", rev.ExternalID, err)
 				}
 				pop.Reviews = append(pop.Reviews, metrics.Entity[ontology.Review]{ExternalID: rev.ExternalID, Value: r})
+			}
+			contribs, err := store.Traverse(ctx, pr.Koid, string(ontology.RelAIContributes), knowledge.Inbound, 1)
+			if err != nil {
+				return pop, fmt.Errorf("intelligence: traverse AI contributions of %s: %w", pr.ExternalID, err)
+			}
+			for _, co := range contribs {
+				c, err := convert[ontology.CodeContribution](co)
+				if err != nil {
+					return pop, fmt.Errorf("intelligence: decode AI contribution %s: %w", co.ExternalID, err)
+				}
+				pop.CodeContributions = append(pop.CodeContributions, metrics.Entity[ontology.CodeContribution]{ExternalID: co.ExternalID, Value: c})
 			}
 		}
 	}

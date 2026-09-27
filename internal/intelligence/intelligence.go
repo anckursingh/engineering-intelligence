@@ -61,6 +61,7 @@ var candidates = []candidate{
 	{"cycle_time", "Cycle time", "days", metrics.DefCycleTime, metrics.CycleTime},
 	{"review_latency", "Review latency", "days", metrics.DefReviewLatency, metrics.ReviewLatency},
 	{"throughput", "Throughput", "PRs", metrics.DefThroughput, metrics.Throughput},
+	{"ai_assisted_pr_pct", "AI-assisted PR percentage", "%", metrics.DefAIAssistedPRPct, metrics.AIAssistedPRPct},
 }
 
 // limitations carry every candidate's definition limits plus the causality

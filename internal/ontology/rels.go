@@ -54,6 +54,12 @@ package ontology
 //	                inverse: resolved identities (inbound traversal)
 //	                cardinality: N:1 — many claims, one engineer
 //	                test: resolver suite (§9) + AC-ID-001/AC-ID-003
+//
+//	AI_CONTRIBUTES  source CodeContribution → target PullRequest
+//	                meaning: this AI contribution shaped the PR (§26-27)
+//	                inverse: AI-assisted PRs (inbound traversal)
+//	                cardinality: N:1 per PR
+//	                test: TestPopulationCollectsContributions (population walk)
 type RelType string
 
 const (
@@ -66,4 +72,5 @@ const (
 	RelContainsReview RelType = "CONTAINS_REVIEW"
 	RelPassed         RelType = "PASSED" // PullRequest → Build; reserved until Build fetch lands
 	RelResolvesTo     RelType = "RESOLVES_TO"
+	RelAIContributes  RelType = "AI_CONTRIBUTES"
 )
