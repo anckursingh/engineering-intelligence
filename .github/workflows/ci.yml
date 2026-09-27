@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: verify
+        shell: pwsh
+        # The gate lives in scripts/verify.ps1 so local dev and CI run the
+        # same checks. -race needs CGO (gcc): always available on ubuntu,
+        # not guaranteed on windows runners — the matrix still covers both.
+        run: ./scripts/verify.ps1 ${{ matrix.os == 'ubuntu-latest' && '-Race' || '' }}
+
+  # Live GitHub E2E (TestLiveE2E): runs only once the repo configures
+  # vars.EI_E2E_OWNER / vars.EI_E2E_REPO (and optionally a token secret).
+  # Dormant repo recommended so the idempotency assertion cannot flake.
+  e2e:
+    if: ${{ vars.EI_E2E_OWNER != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: live e2e
+        env:
+          EI_E2E_OWNER: ${{ vars.EI_E2E_OWNER }}
+          EI_E2E_REPO: ${{ vars.EI_E2E_REPO }}
+          GITHUB_TOKEN: ${{ secrets.EI_E2E_GITHUB_TOKEN }}
+        run: go test -v -run TestLiveE2E ./test/e2e/

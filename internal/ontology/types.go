@@ -1,0 +1,100 @@
+// Package ontology holds the canonical engineering entities. It belongs to
+// Engineering Intelligence, not AIKOQL: these types are converted to generic
+// knowledge objects before persistence, so the store never sees them.
+package ontology
+
+import "time"
+
+type Organization struct {
+	Login       string    `json:"login"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	HTMLURL     string    `json:"html_url,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type Engineer struct {
+	Name         string `json:"name"`
+	Email        string `json:"email,omitempty"` // normalized; often empty (GitHub hides emails)
+	Login        string `json:"login,omitempty"` // "" if unlinked commit author
+	AvatarURL    string `json:"avatar_url,omitempty"`
+	IdentityKey  string `json:"identity_key"`  // dedup key; "" only for ghost authors
+	IdentityRule string `json:"identity_rule"` // "login" | "github_noreply" | "email"
+}
+
+type Repository struct {
+	Owner         string    `json:"owner"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description,omitempty"`
+	Language      string    `json:"language,omitempty"`
+	DefaultBranch string    `json:"default_branch"`
+	Archived      bool      `json:"archived"`
+	Private       bool      `json:"private"`
+	HTMLURL       string    `json:"html_url,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	PushedAt      time.Time `json:"pushed_at"`
+}
+
+type Issue struct {
+	Repository  string    `json:"repository"` // owner/name
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body,omitempty"`
+	State       string    `json:"state"`
+	AuthorLogin string    `json:"author_login,omitempty"`
+	Labels      []string  `json:"labels,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	ClosedAt    time.Time `json:"closed_at,omitempty"`
+}
+
+type Commit struct {
+	Repository  string    `json:"repository"`
+	SHA         string    `json:"sha"`
+	Message     string    `json:"message"`
+	AuthorName  string    `json:"author_name"`
+	AuthorEmail string    `json:"author_email,omitempty"`
+	AuthorLogin string    `json:"author_login,omitempty"` // "" if GitHub could not link the author
+	CommittedAt time.Time `json:"committed_at"`
+}
+
+type PullRequest struct {
+	Repository     string    `json:"repository"`
+	Number         int       `json:"number"`
+	Title          string    `json:"title"`
+	Body           string    `json:"body,omitempty"`
+	State          string    `json:"state"`
+	Merged         bool      `json:"merged"`
+	AuthorLogin    string    `json:"author_login,omitempty"`
+	BaseRef        string    `json:"base_ref"`
+	HeadRef        string    `json:"head_ref"`
+	MergeCommitSHA string    `json:"merge_commit_sha,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	MergedAt       time.Time `json:"merged_at,omitempty"`
+}
+
+type Review struct {
+	Repository    string    `json:"repository"`
+	PRNumber      int       `json:"pr_number"`
+	ID            int64     `json:"id"`
+	ReviewerLogin string    `json:"reviewer_login"`
+	State         string    `json:"state"` // APPROVED, CHANGES_REQUESTED, COMMENTED
+	SubmittedAt   time.Time `json:"submitted_at"`
+}
+
+// Build is defined now so AC-KG-001 can complete next increment; the fetch
+// needs the Actions/Checks API family and lands with it.
+type Build struct {
+	Repository  string    `json:"repository"`
+	ID          int64     `json:"id"` // workflow run id
+	Name        string    `json:"name"`
+	HeadSHA     string    `json:"head_sha"`
+	Conclusion  string    `json:"conclusion"`
+	Status      string    `json:"status"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+	HTMLURL     string    `json:"html_url,omitempty"`
+}

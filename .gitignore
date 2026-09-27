@@ -1,0 +1,21 @@
+# checkpoints (operational state, regenerated on next run)
+.ei/
+
+# local aikoql database (native serve artifacts; the DB lives in the container
+# volume or an explicit data dir, never the repo)
+aikoql.redb
+aikoql.redb.audit.log
+aikoql-v2/
+
+# builds
+/ei
+/ei.exe
+
+# secrets
+.env
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
