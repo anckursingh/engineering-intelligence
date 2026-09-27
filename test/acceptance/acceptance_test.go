@@ -15,16 +15,14 @@ package acceptance
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/ancku/aikoql-sdk"
 	"github.com/anckursingh/engineering-intelligence/internal/checkpoint"
 	"github.com/anckursingh/engineering-intelligence/internal/github"
 	"github.com/anckursingh/engineering-intelligence/internal/github/githubtest"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
+	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
@@ -41,21 +39,7 @@ func TestAcceptanceSlice1(t *testing.T) {
 func TestAcceptanceSlice1Aikoql(t *testing.T) {
 	runAcceptance(t, func(t *testing.T) knowledge.KnowledgeStore {
 		t.Helper()
-		bin := os.Getenv("AIKOQL_MCP_BIN")
-		if bin == "" {
-			t.Skip("AIKOQL_MCP_BIN not set")
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		t.Cleanup(cancel)
-		c, err := aikoql.DialStdio(ctx, bin, "serve", filepath.Join(t.TempDir(), "kb"))
-		if err != nil {
-			t.Fatalf("DialStdio: %v", err)
-		}
-		t.Cleanup(func() { c.Close() })
-		if err := c.Initialize(ctx); err != nil {
-			t.Fatalf("Initialize: %v", err)
-		}
-		return knowledge.NewAikoql(c)
+		return aikoqltest.Live(t)
 	})
 }
 

@@ -8,32 +8,16 @@ package knowledge_test
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/ancku/aikoql-sdk"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
+	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
 )
 
-func benchStore(b *testing.B) (*aikoql.Client, knowledge.KnowledgeStore) {
+func benchStore(b *testing.B) knowledge.KnowledgeStore {
 	b.Helper()
-	bin := os.Getenv("AIKOQL_MCP_BIN")
-	if bin == "" {
-		b.Skip("AIKOQL_MCP_BIN not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	b.Cleanup(cancel)
-	c, err := aikoql.DialStdio(ctx, bin, "serve", filepath.Join(b.TempDir(), "kb"))
-	if err != nil {
-		b.Fatalf("DialStdio: %v", err)
-	}
-	b.Cleanup(func() { c.Close() })
-	if err := c.Initialize(ctx); err != nil {
-		b.Fatalf("Initialize: %v", err)
-	}
-	return c, knowledge.NewAikoql(c)
+	return aikoqltest.Live(b)
 }
 
 func benchObj(i int) knowledge.KnowledgeObject {
@@ -48,7 +32,7 @@ func benchObj(i int) knowledge.KnowledgeObject {
 // Upsert cost includes the index lookup + defensive get + index write:
 // 4 server round trips per create, 2-3 per no-op rerun.
 func BenchmarkAikoqlUpsert(b *testing.B) {
-	_, s := benchStore(b)
+	s := benchStore(b)
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -63,7 +47,7 @@ func BenchmarkAikoqlUpsert(b *testing.B) {
 const benchSetup = 20
 
 func BenchmarkAikoqlGetByExternalID(b *testing.B) {
-	_, s := benchStore(b)
+	s := benchStore(b)
 	ctx := context.Background()
 	for i := 0; i < benchSetup; i++ {
 		if _, err := s.Upsert(ctx, benchObj(i)); err != nil {
@@ -80,7 +64,7 @@ func BenchmarkAikoqlGetByExternalID(b *testing.B) {
 
 // Directed BFS over a 20-node chain: ~4 depth-1 traverses + 3 gets.
 func BenchmarkAikoqlTraverseDepth3(b *testing.B) {
-	_, s := benchStore(b)
+	s := benchStore(b)
 	ctx := context.Background()
 	var koids []string
 	for i := 0; i < benchSetup; i++ {

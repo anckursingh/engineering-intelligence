@@ -43,6 +43,12 @@ Tenant scoping (§8), suite `knowledgetest.RunTenantContract` — `knowledge.Wit
 
 Identity resolution tenant-scoped at the sync layer: `TestTenantScopedIdentityResolution` (two tenants over one store, same email → two engineers; PR graph stays in-scope). `github.Config.Tenant` wraps the store per run; empty tenant = zero behavior change.
 
+## Ingestion layer (§10–11), suite `internal/ingestion` (Memory + live AikoqlStore)
+
+`ingestion.Run.Apply(store, Mutation{Objects, Relationships})` — objects first, then relationships; the first failing element stops the mutation as `*PartialFailure` ("object N"/"relationship N", errors unwrap). Atomicity is defined, never assumed: no transactions in AIKOQL, so applied elements persist (no rollback) and the compensation contract is re-apply — identical re-apply is a no-op (no version bump, no duplicate edge). Same-mutation relationships reference koids from the mutation that carried the objects (`Result.Objects`).
+
+Live-server spawn helper extracted to `internal/knowledge/aikoqltest.Live(t)` (used by contract, acceptance, ingestion, benchmarks).
+
 Store-specific guarantees (Memory only, not portable): provenance-only change never bumps version.
 
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
@@ -78,7 +84,7 @@ AikoqlStore with `AIKOQL_MCP_BIN` set via `-run TestAcceptanceSlice1Aikoql`)
 - [x] GitHub unavailable / rate limit
 - [x] AIKOQL unavailable — server errors mapped: NOT_FOUND/VALIDATION_ERROR → ErrNotFound, rest wrapped
 - [x] network timeout / ctx cancellation mid-call — ctx pre-checks on all five ops; SDK projects deadlines onto the socket
-- [ ] partial source failure — add with the ingestion layer
+- [x] partial source failure — ingestion.Run.Apply: first failure = *PartialFailure, prior elements persist, re-apply compensates
 - [x] process restart — TestAikoqlRestartPersistence (same dbDir, fresh server, data + traversal intact)
 - [ ] checkpoint corruption — add with ingestion hardening
 - [ ] duplicate / out-of-order event — add with ingestion hardening

@@ -14,41 +14,26 @@ import (
 
 	"github.com/ancku/aikoql-sdk"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
+	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge/knowledgetest"
 )
 
-// liveStore spawns a fresh per-test aikoql server over stdio and returns the
-// adapter wrapped around it. Gated on AIKOQL_MCP_BIN (CI sets it; see TESTING.md).
-func liveStore(t *testing.T) knowledge.KnowledgeStore {
-	t.Helper()
-	bin := os.Getenv("AIKOQL_MCP_BIN")
-	if bin == "" {
-		t.Skip("AIKOQL_MCP_BIN not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	t.Cleanup(cancel)
-	dbDir := filepath.Join(t.TempDir(), "kb") // non-existent: auto-created by the server
-	c, err := aikoql.DialStdio(ctx, bin, "serve", dbDir)
-	if err != nil {
-		t.Fatalf("DialStdio: %v", err)
-	}
-	t.Cleanup(func() { c.Close() })
-	if err := c.Initialize(ctx); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-	return knowledge.NewAikoql(c)
-}
-
 // AikoqlStore is graded against the same frozen contract as Memory (Phase 1B).
 func TestAikoqlContract(t *testing.T) {
-	knowledgetest.RunContract(t, liveStore)
+	knowledgetest.RunContract(t, func(t *testing.T) knowledge.KnowledgeStore {
+		t.Helper()
+		return aikoqltest.Live(t)
+	})
 }
 
 // Tenant scoping (§8) on the real store: the server's idempotency index is
 // global and type-blind, so tenant collision-freedom is the adapter+wrapper's
 // job — this must hold against the live server, not just Memory.
 func TestAikoqlTenantContract(t *testing.T) {
-	knowledgetest.RunTenantContract(t, liveStore)
+	knowledgetest.RunTenantContract(t, func(t *testing.T) knowledge.KnowledgeStore {
+		t.Helper()
+		return aikoqltest.Live(t)
+	})
 }
 
 // Phase 1E (§7): persistence across process restart — data written by one
