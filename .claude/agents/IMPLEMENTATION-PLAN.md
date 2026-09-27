@@ -18,10 +18,10 @@ Phase 1A (GitHub slice): done. Working: Phase 1B (contract freeze).
 ## Commit sequence (§36)
 
 - [x] 1. Add KnowledgeStore contract tests — `internal/knowledge/knowledgetest`, graded against Memory
-- [ ] 2. Add AIKOQL public client contract — inspect live API first (MCP over TCP :9090, token init, tools/call); do NOT copy historical SDK code
-- [ ] 3. Add AIKOQL client unit tests — handshake, upsert, idempotency, retrieval, relationships, traversal, error mapping, ctx cancellation (§5 order)
-- [ ] 4. Implement AIKOQL client — stdlib only (net conn + JSON-RPC 2.0); transport errors never leak past it
-- [ ] 5. Add AikoqlStore — `internal/knowledge/aikoql.go`, mechanical translation, passes the same contract suite
+- [x] 2. Add AIKOQL public client contract — live API probed over stdio (wire facts in TESTING.md §AIKOQL wire contract); consumed the user's SDK at `../Mnemosyne/crates/sdk/go` via go.mod replace, no historical code copied
+- [x] 3. Add AIKOQL client unit tests — fakeDB-scripted: upsert/idempotency/retrieval/relationships/traversal/error mapping/ctx cancellation (§5 order)
+- [x] 4. Implement AIKOQL client — `internal/knowledge/aikoql.go` (AikoqlStore over a thin `aikoqlDB` CallTool surface); transport errors never leak past `knowledge` errors
+- [x] 5. Add AikoqlStore — passes the same contract suite (11/11 live) + restart persistence
 - [ ] 6. Run GitHub acceptance suite against AikoqlStore — swap the store, all ACs stay green
 - [ ] 7. Add tenant-scoped identity — (tenant, source, external_id) never collide; isolation tests (§8)
 - [ ] 8. Add ingestion application layer — `internal/ingestion` (§10–12): mutation model + atomicity, relationship vocabulary finalized
