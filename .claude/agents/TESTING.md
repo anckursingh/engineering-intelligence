@@ -176,6 +176,16 @@ Suite: `internal/intelligence` (`agent_test.go`; Memory + live AikoqlStore).
 - POST /ask serves the same contract over HTTP (400 on malformed body / empty question / bad or inverted times / unknown scope — scope only matters when the engine runs; a refusal needs no scope).
 - Deferred: an LLM reasoning step and any conversational UI join when a real natural-language client exists; the classification table grows one entry per supported question.
 
+## AI telemetry source — Claude Code connector (§25–26, §38 MVP path)
+
+Suite: `internal/claudecode` (`sync_test.go`; Memory + live AikoqlStore). The §38 MVP's "one AI-development telemetry source" — a transcript is a log the tool itself wrote, and every extraction is backed by a line in it.
+
+- One CodingSession per .jsonl (sessionId, model, first/last timestamps); an Interaction per user prompt; an AgentRun per tool-calling assistant message (EndedAt = its last tool result, Status failed on any is_error); an AgentTask per tool_use (pending while no result has landed; `permission denied` in an is_error result sets human_intervention — a telemetry fact, not a judgment); a CodeContribution per Edit/Write/MultiEdit/NotebookEdit whose repository derives from the message cwd's .git/config origin remote (test seam `RepoOf`; the real reader is unit-tested on https + ssh URL forms).
+- PR link comes from telemetry only: the PR URL the session's own tool output recorded (`gh pr create` result text) — first URL per repo wins (transcripts are chronological). Attribution is DIRECT with source + the tool_use record as evidence (`Validate()` passes).
+- Honest gaps, never filled (`TestParseHonestGaps`, `TestSyncUnlinkedContribution`): no PR URL → PRNumber 0 + unlinked; no repository identity → unattributed, no object; PR absent from the store → contribution stored but unlinked (run the GitHub sync first); malformed/truncated lines → skipped and counted as unparsed. Rerun idempotent (re-seen identical counts nothing — the github pre-check pattern).
+- Fixture transcripts mirror the real format probed from live transcripts (type/sessionId/timestamp/cwd/uuid/message/content blocks), including fractional-second timestamps (RFC3339Nano).
+- Ponytail notes: CostUSD stays 0 (this transcript version records no cost); no .git walk-up (sessions run at the repo root); no checkpoint (transcript dirs are small — add when a scan becomes slow); Agent/Model/AgentOutcome objects not emitted (no metric or question reads them yet).
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
