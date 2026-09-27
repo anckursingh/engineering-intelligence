@@ -134,6 +134,16 @@ Suite: `internal/intelligence` (`population_test.go`, `api_test.go`; Memory + li
 - Pinned by `TestAPIInvestigationEndpoints` (the full §23 statement through the HTTP layer), `TestAPIMetricsAndHealth`, `TestAPIBadRequests`, `TestPopulationFromScope`, `TestPopulationScopeIsolation`, and live legs `TestPopulationLiveAikoql` / `TestAPIInvestigationLiveAikoql`.
 - Fixture gotcha (hit and fixed): sections of a fixture must use disjoint PR numbers — external IDs collide otherwise and upserts overwrite the other window's objects.
 
+## AI development telemetry (§25–26)
+
+Suite: `internal/ontology` (`ai_test.go`; package-internal, Memory-store-agnostic — mapping + validation only).
+
+- The eight canonical concepts are vendor-neutral types: Agent, Model, CodingSession, Interaction, AgentRun, AgentTask, AgentOutcome, CodeContribution. Provider and source are ATTRIBUTES, never types — no ClaudeCodeSession (`TestAITypesMap` pins all 8 TypeNames + ext IDs + provenance source).
+- External IDs live under the `ei.com:` AI namespace, prefix-disjoint per type: `ei.com:agent:<provider>:<name>`, `ei.com:model:<provider>:<name>`, `ei.com:coding-session|interaction|agent-run|agent-task|agent-outcome|ai-contribution:<source>:<id>`. `TestAIExternalIDCollisions` pins the same provider/name and same source/id across types never collide.
+- `NewSourceProvenance(source, sourceURL, sourceUpdatedAt)` is NewProvenance for non-GitHub sources: Source = the telemetry source (e.g. "claude-code"), ConnectorVersion `ei-ai/v0`.
+- §26 attribution is evidence-based (`TestAttributionValidate` pins 7 cases): `Attribution{Level, Source, Evidence, AttributedAt}`; DIRECT and STRONG require a named telemetry source AND an evidence reference — a bare DIRECT claim is invalid. INFERRED/UNKNOWN are valid without them. There is NO function that derives attribution from code style; UNKNOWN stays UNKNOWN until telemetry says otherwise.
+- No connector in this item — no real telemetry source exists to connect; PR-linking rels join when item 19's AI metrics need them.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
