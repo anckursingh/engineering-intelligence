@@ -13,6 +13,7 @@ import (
 type Checkpoint struct {
 	Version int              `json:"version"`
 	Github  CheckpointGithub `json:"github"`
+	Jira    CheckpointJira   `json:"jira"`
 	Runs    []RunRecord      `json:"runs,omitempty"` // last 5 runs
 }
 
@@ -21,10 +22,15 @@ type CheckpointGithub struct {
 	Repos        map[string]string `json:"repos"`         // "owner/name" → default-branch head SHA
 }
 
+type CheckpointJira struct {
+	UpdatedSince time.Time `json:"updated_since"` // issue search watermark
+}
+
 type RunRecord struct {
 	StartedAt  time.Time `json:"started_at"`
 	EndedAt    time.Time `json:"ended_at"`
-	Owner      string    `json:"owner"`
+	Owner      string    `json:"owner,omitempty"`   // github runs
+	Project    string    `json:"project,omitempty"` // jira runs
 	NewObjects int       `json:"new_objects"`
 }
 

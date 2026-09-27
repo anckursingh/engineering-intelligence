@@ -56,3 +56,17 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 		t.Errorf(".tmp file left behind: %v", err)
 	}
 }
+
+// TestLoadCorruptFailsLoudly pins the corruption contract (§34): a corrupt
+// checkpoint errors — it is never silently reset, because a zero watermark
+// would re-ingest history AND clobber the corrupt file. Both connectors
+// (github, jira) share this path.
+func TestLoadCorruptFailsLoudly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load of a corrupt checkpoint must error")
+	}
+}

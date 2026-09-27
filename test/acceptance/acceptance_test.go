@@ -21,6 +21,8 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/checkpoint"
 	"github.com/anckursingh/engineering-intelligence/internal/github"
 	"github.com/anckursingh/engineering-intelligence/internal/github/githubtest"
+	"github.com/anckursingh/engineering-intelligence/internal/jira"
+	"github.com/anckursingh/engineering-intelligence/internal/jira/jiratest"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
@@ -64,6 +66,36 @@ func runAcceptance(t *testing.T, newStore func(t *testing.T) knowledge.Knowledge
 		for _, typ := range []string{"Commit", "PullRequest", "Organization", "Repository"} {
 			if c := res.Counts[typ]; c.New != 0 || c.Updated != 0 {
 				t.Errorf("%s = %+v, want no new/updated (incremental)", typ, c)
+			}
+		}
+	})
+
+	t.Run("AC-ING-002 jira incremental sync", func(t *testing.T) {
+		w := jiratest.NewWorld(t)
+		store := newStore(t)
+		cfg := w.SyncConfig(t.TempDir(), store)
+		res, err := jira.Sync(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := res.Counts["Issue"]; c != (jira.Count{New: 1}) {
+			t.Errorf("run1 Issue = %+v, want new 1", c)
+		}
+		w.AddDeltaActivity()
+		res2, err := jira.Sync(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := res2.Counts["Issue"]; c != (jira.Count{New: 1}) {
+			t.Errorf("run2 Issue = %+v, want new 1 (delta only)", c)
+		}
+		res3, err := jira.Sync(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for typ, c := range res3.Counts {
+			if c.New != 0 || c.Updated != 0 {
+				t.Errorf("%s = %+v on unchanged rerun, want zero (AC-ING-005 for jira)", typ, c)
 			}
 		}
 	})

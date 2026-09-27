@@ -73,6 +73,17 @@ Live-server spawn helper extracted to `internal/knowledge/aikoqltest.Live(t)` (u
 
 Store-specific guarantees (Memory only, not portable): provenance-only change never bumps version.
 
+## Jira connector (§14)
+
+Suite: `internal/jira` (unit, external package via `jiratest`) + acceptance AC-ING-002 (Memory + live AikoqlStore).
+
+- `TestJiraSyncRun1Full` — canonical mapping: TypeName "Issue"/"Epic" by issuetype, extID `jira.com:<site-host>:issue:<KEY>` (port excluded — test-server ports must never leak into identity), provenance Source "jira" + run-stamped IngestionRun, checkpoint watermark advanced, one run record.
+- `TestJiraSyncRun2Delta` — incrementality is the JQL itself: run2's query carries `updated >= "<minute-truncated watermark>"`, the fake world honors the boundary in both date formats (classic `2006/01/02 15:04` and RFC3339), so only the delta issue lands; unchanged rerun = zero counts (AC-ING-005); delta issue resolvable.
+- `TestLoadCorruptFailsLoudly` (checkpoint) — corrupt checkpoint errors, never silently reset (both connectors share the file now).
+- Wire time formats: Jira classic `2006-01-02T15:04:05.000-0700` and RFC3339 (fake world serves the latter).
+
+Scope notes: library-only (no CLI wiring); no retry (ponytail — Jira 429s rare at this scale, add backoff when hit); no assignee/engineer edges (item 13 owns identity). Watermark minute-truncation re-fetches a partial minute of overlap — idempotent upsert keeps those counts honest.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:
@@ -108,7 +119,7 @@ AikoqlStore with `AIKOQL_MCP_BIN` set via `-run TestAcceptanceSlice1Aikoql`)
 - [x] network timeout / ctx cancellation mid-call — ctx pre-checks on all five ops; SDK projects deadlines onto the socket
 - [x] partial source failure — ingestion.Run.Apply: first failure = *PartialFailure, prior elements persist, re-apply compensates
 - [x] process restart — TestAikoqlRestartPersistence (same dbDir, fresh server, data + traversal intact)
-- [ ] checkpoint corruption — add when a second consumer shares the checkpoint (Jira)
+- [x] checkpoint corruption — `TestLoadCorruptFailsLoudly`: corrupt checkpoint errors loudly (never silently reset), both connectors share the path
 - [ ] duplicate / out-of-order event — lands with §13.2 event-driven ingestion (webhooks); current polling model cannot observe out-of-order events
 
 Invariant: **never advance a committed checkpoint beyond data that has not been durably persisted.**

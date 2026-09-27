@@ -13,7 +13,7 @@ If a requirement is ambiguous, the TDD doc wins. Update this file as each item c
 
 ## Status
 
-Phase 1A (GitHub slice): done. Working: item 12 — Jira connector (§14).
+Phase 1A (GitHub slice): done. Working: item 13 — cross-source identity (§9, §15).
 
 ## Commit sequence (§36)
 
@@ -28,7 +28,7 @@ Phase 1A (GitHub slice): done. Working: item 12 — Jira connector (§14).
 - [x] 9. Refactor GitHub connector through the ingestion layer — every sync write routes through `ingestion.Run.Apply`; the layer stamps run-scoped provenance (ObservedAt, IngestionRun) per object, never clobbering connector-supplied values; `ontology.NewProvenance(sourceURL, sourceUpdatedAt)` no longer carries run-scoped fields. Identity-resolution orchestration (run-local maps) and checkpoint advance-after-success stay in the connector until a second source makes them shared. All suites green on Memory AND live AikoqlStore
 - [x] 10. Harden GitHub incremental sync (§13) — 13.1 retry backoff is context-interruptible (timer+select; TestSyncContextCancelDuringRetry proves prompt return); 13.2 keep full-list polling — replacement (webhooks/events + cursor + reconciliation) must carry equivalent acceptance coverage first; 13.3 merge-commit model tested across merge/squash/rebase/unavailable-merge-SHA (TestMergeCommitModel — one merge-commit edge, no edge on unavailable, head-commit modeling deferred until metrics need it); 13.4 PR→issue linking: duplicate body references collapse to one edge, nonexistent referenced issue skips without failing the run (TestPRToIssueLinks); authoritative linking data (GraphQL ClosingIssuesReferences) deferred with a `ponytail:` note — regex stays the fallback-only mechanism
 - [x] 11. Refine relationship vocabulary — absorbed into item 9: `internal/ontology/rels.go` carries the per-rel table (source, target, meaning, inverse, cardinality, test) + constants; PART_OF split into BELONGS_TO / MERGED_AS / CONTAINS_REVIEW (§12)
-- [ ] 12. Add Jira connector — only after persistence + tenant identity + ingestion exist (§14)
+- [x] 12. Add Jira connector — `internal/jira` (§14): stdlib-HTTP REST v3 client (basic auth, issue search), `checkpoint.Jira.UpdatedSince` watermark, `RunRecord.Project`; normalizes into canonical ontology (`ontology.JiraIssue` — TypeName "Issue"/"Epic", never the Jira schema; extID `jira.com:<site-host>:issue:<KEY>`, port excluded so test-server ports never leak into identity); incrementality = the JQL `updated >= "<minute-truncated watermark>"` filter itself (server-side, not client guesswork), watermark advances only after full success (AC-ING-004); counts honest via pre-upsert version compare, identical rerun = zero (AC-ING-005); fake world (`jiratest`) honors the updated>= boundary in both date formats. Scope: library-only — no CLI wiring, no retry (ponytail: Jira 429s rare at this scale, add backoff when hit), no assignee/engineer edges (item 13 owns identity). Green on Memory AND live AikoqlStore (acceptance AC-ING-002)
 - [ ] 13. Add cross-source identity resolution — persistent SourceIdentity RESOLVES_TO Engineer, never silent merges (§9, §15)
 - [ ] 14. Add deterministic metric engine — `internal/metrics` (§16–19)
 - [ ] 15. Add evidence model — reconstructable explanations, epistemic states (§20–21)
