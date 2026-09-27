@@ -166,6 +166,16 @@ Suite: `internal/intelligence` (`board_test.go`; Memory + live AikoqlStore).
 - No individual ranking (`TestBoardNoIndividualRanking`) — by construction: items cite only PR/review/contribution objects. Check structurally (no `Engineer`/`SourceIdentity` evidence types, no identity keys) — the word "Engineering" trips a substring check on the doc's own title.
 - Unknown scope → 400 (a navigation typo; POST /investigations keeps 500 — there scope comes from a request body). "What changed / why" stays the investigations endpoint's job.
 
+## Evidence-backed engineering agent (§29)
+
+Suite: `internal/intelligence` (`agent_test.go`; Memory + live AikoqlStore).
+
+- The agent is `Ask(ctx, store, Query{Text, Scope, From, To}) → Answer{Question, Class, Statement, Evidence, Limitations}` — the §29 flow mapped onto the deterministic pieces: question classification → Population (retrieval + traversal) → CycleTimeChange (metrics + evidence + reasoning) → answer with evidence references. The agent's "reasoning" IS the deterministic engine: no LLM step exists to drift.
+- Classification matches normalized phrasing (lowercase; change words or "why…" + "cycle time" — `TestAskClassification` pins variants and refusals). The comparison window is derived — the immediately preceding period of equal length — the natural reading of "change".
+- Never fabricate (`TestAskCycleTimeChange` + `TestAskUnknownScope`): every cited evidence ObjectID resolves back through the store; unknown questions are honest refusals listing the supported question (no evidence, no invented answer); an unknown scope is an error, not an answer.
+- POST /ask serves the same contract over HTTP (400 on malformed body / empty question / bad or inverted times / unknown scope — scope only matters when the engine runs; a refusal needs no scope).
+- Deferred: an LLM reasoning step and any conversational UI join when a real natural-language client exists; the classification table grows one entry per supported question.
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:

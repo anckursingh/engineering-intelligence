@@ -1,6 +1,7 @@
 // api.go is the §24 HTTP surface over a KnowledgeStore: structured evidence,
 // not only prose. Endpoints: GET /health, GET /metrics, GET /metrics/{metric},
-// POST /investigations, GET /investigations/{id}, GET /board (§28).
+// POST /investigations, GET /investigations/{id}, GET /board (§28),
+// POST /ask (§29).
 // Investigations are deterministic and cheap, so results live in memory —
 // ponytail: persist them when a client that restarts servers exists.
 package intelligence
@@ -88,6 +89,7 @@ func NewAPI(store knowledge.KnowledgeStore) *API {
 	mux.HandleFunc("POST /investigations", a.handleInvestigate)
 	mux.HandleFunc("GET /investigations/{id}", a.handleGetInvestigation)
 	mux.HandleFunc("GET /board", a.handleBoard)
+	mux.HandleFunc("POST /ask", a.handleAsk)
 	a.mux = mux
 	return a
 }
