@@ -47,6 +47,13 @@ package ontology
 //	                inverse: part of PR (inbound traversal)
 //	                cardinality: 1:N
 //	                test: AC-KG-001 + TestSyncRun1Full
+//
+//	RESOLVES_TO     source SourceIdentity → target Engineer
+//	                meaning: this source identity is that canonical engineer;
+//	                identity-layer edge, never a source-domain fact
+//	                inverse: resolved identities (inbound traversal)
+//	                cardinality: N:1 — many claims, one engineer
+//	                test: resolver suite (§9) + AC-ID-001/AC-ID-003
 type RelType string
 
 const (
@@ -58,4 +65,5 @@ const (
 	RelMergedAs       RelType = "MERGED_AS"
 	RelContainsReview RelType = "CONTAINS_REVIEW"
 	RelPassed         RelType = "PASSED" // PullRequest → Build; reserved until Build fetch lands
+	RelResolvesTo     RelType = "RESOLVES_TO"
 )

@@ -59,15 +59,10 @@ type syncer struct {
 	client   *Client
 	store    knowledge.KnowledgeStore
 	run      *ingestion.Run
+	resolver *identity.Resolver // persistent identity claims (§9)
 	counts   map[string]Count
 	rels     int
 	totalNew int
-
-	// run-local identity dedup. ponytail: cross-source merging (Jira) will
-	// persist these claims in AIKOQL in the next slice.
-	byLogin map[string]string
-	byEmail map[string]string
-	byKey   map[string]string
 
 	shaToCommit map[string]string // sha → commit koid (merge-commit lookup)
 	issueKoids  map[int]string    // issue number → koid, per repo
@@ -111,36 +106,22 @@ func (s *syncer) relate(from, to string, relType ontology.RelType) error {
 	return nil
 }
 
-// engineer upserts the canonical engineer for a resolved source identity,
-// reusing an existing engineer when any of login/email/key was seen before.
+// engineer resolves the source identity through the persistent claim store
+// (§9): first sight creates the canonical Engineer + SourceIdentity claim;
+// re-sight — same run, later run, or another source — reuses them.
 func (s *syncer) engineer(p identity.Person, prov knowledge.Provenance) (string, error) {
 	if p.Key == "" {
 		return "", nil // ghost author: no engineer, no edge
 	}
-	if koid, ok := s.byLogin[strings.ToLower(p.Login)]; p.Login != "" && ok {
-		return koid, nil
-	}
-	if koid, ok := s.byEmail[p.Email]; p.Email != "" && ok {
-		return koid, nil
-	}
-	if koid, ok := s.byKey[p.Key]; ok {
-		return koid, nil
-	}
-	e := ontology.Engineer{Name: p.Name, Email: p.Email, Login: p.Login, IdentityKey: p.Key, IdentityRule: p.Rule}
-	ko, err := e.KnowledgeObject(prov)
+	koid, created, err := s.resolver.Resolve(s.ctx, p, prov)
 	if err != nil {
-		return "", fmt.Errorf("github: map engineer %s: %w", p.Key, err)
+		return "", fmt.Errorf("github: resolve identity %s: %w", p.Key, err)
 	}
-	koid, err := s.upsert(ko)
-	if err != nil {
-		return "", err
-	}
-	s.byKey[p.Key] = koid
-	if p.Login != "" {
-		s.byLogin[strings.ToLower(p.Login)] = koid
-	}
-	if p.Email != "" {
-		s.byEmail[p.Email] = koid
+	if created {
+		c := s.counts["Engineer"]
+		c.New++
+		s.counts["Engineer"] = c
+		s.totalNew++
 	}
 	return koid, nil
 }
@@ -177,10 +158,8 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		client:      client,
 		store:       store,
 		run:         run,
+		resolver:    identity.NewResolver(store, run, "github", ""),
 		counts:      map[string]Count{},
-		byLogin:     map[string]string{},
-		byEmail:     map[string]string{},
-		byKey:       map[string]string{},
 		shaToCommit: map[string]string{},
 		issueKoids:  map[int]string{},
 	}

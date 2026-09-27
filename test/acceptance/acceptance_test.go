@@ -8,9 +8,9 @@
 // AikoqlStore (live server, gated on AIKOQL_MCP_BIN) to prove the storage
 // contract is not a Memory convenience.
 //
-// Not automatable here (later slices or manual): AC-ID-001/003 (Jira +
-// cross-source merge), AC-KG-002/003, all MET/INT/UI, AC-AQ-004 (proven by
-// the aikoql container smoke; becomes a CI job with the SDK adapter).
+// Not automatable here (later slices or manual): AC-KG-002/003, all MET/INT/UI,
+// AC-AQ-004 (proven by the aikoql container smoke; becomes a CI job with the
+// SDK adapter).
 package acceptance
 
 import (
@@ -145,6 +145,82 @@ func runAcceptance(t *testing.T, newStore func(t *testing.T) knowledge.Knowledge
 		for typ, c := range res.Counts {
 			if c.New != 0 || c.Updated != 0 {
 				t.Errorf("%s = %+v on unchanged rerun, want zero new/updated (duplicates)", typ, c)
+			}
+		}
+	})
+
+	t.Run("AC-ID-001 two sources one engineer", func(t *testing.T) {
+		// The identity world carries just the identity-relevant objects: the
+		// live aikoql leg budgets ~120 server calls per subtest, and issues/
+		// PRs/reviews add nothing to what this AC pins.
+		gw := githubtest.NewIdentityWorld(t)
+		store := newStore(t)
+		if _, err := github.Sync(context.Background(), gw.SyncConfig(t.TempDir(), store)); err != nil {
+			t.Fatal(err)
+		}
+		jw := jiratest.NewWorld(t)
+		if _, err := jira.Sync(context.Background(), jw.SyncConfig(t.TempDir(), store)); err != nil {
+			t.Fatal(err)
+		}
+		// bob@corp.example appears in both sources; both claims must resolve
+		// to ONE canonical engineer (denormalized on the claim; the edge is
+		// pinned by the identity unit tests).
+		resolveTo := func(claimID string) string {
+			t.Helper()
+			claim, err := store.GetByExternalID(context.Background(), claimID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			koid, ok := claim.Properties["canonical_engineer"].(string)
+			if !ok || koid == "" {
+				t.Fatalf("claim %s missing canonical_engineer: %v", claimID, claim.Properties)
+			}
+			return koid
+		}
+		gkoid := resolveTo("ei.com:identity:github:email:bob@corp.example")
+		jkoid := resolveTo("ei.com:identity:jira:email:bob@corp.example")
+		if gkoid != jkoid {
+			t.Errorf("github claim -> %s, jira claim -> %s, want one engineer", gkoid, jkoid)
+		}
+	})
+
+	t.Run("AC-ID-003 ambiguous mappings reviewable, never merged", func(t *testing.T) {
+		gw := githubtest.NewIdentityWorld(t)
+		store := newStore(t)
+		if _, err := github.Sync(context.Background(), gw.SyncConfig(t.TempDir(), store)); err != nil {
+			t.Fatal(err)
+		}
+		jw := jiratest.NewWorld(t)
+		if _, err := jira.Sync(context.Background(), jw.SyncConfig(t.TempDir(), store)); err != nil {
+			t.Fatal(err)
+		}
+		// john.doe@company.com exists only in Jira: a distinct engineer, never
+		// silently merged with github's email-only bob.
+		engineerOf := func(claimID string) string {
+			t.Helper()
+			claim, err := store.GetByExternalID(context.Background(), claimID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			koid, ok := claim.Properties["canonical_engineer"].(string)
+			if !ok || koid == "" {
+				t.Fatalf("claim %s missing canonical_engineer: %v", claimID, claim.Properties)
+			}
+			return koid
+		}
+		bob := engineerOf("ei.com:identity:github:email:bob@corp.example")
+		john := engineerOf("ei.com:identity:jira:email:john.doe@company.com")
+		if bob == john {
+			t.Errorf("ambiguous identity silently merged into %s", bob)
+		}
+		// AC-ID-003: the decision is reviewable — rule, confidence, timestamps.
+		claim, err := store.GetByExternalID(context.Background(), "ei.com:identity:jira:email:john.doe@company.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{"matching_rule", "confidence", "created_at", "resolved_at", "source", "source_identity", "canonical_engineer"} {
+			if _, ok := claim.Properties[f]; !ok {
+				t.Errorf("claim missing reviewable field %q: %v", f, claim.Properties)
 			}
 		}
 	})

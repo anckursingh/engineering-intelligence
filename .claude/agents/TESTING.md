@@ -84,6 +84,16 @@ Suite: `internal/jira` (unit, external package via `jiratest`) + acceptance AC-I
 
 Scope notes: library-only (no CLI wiring); no retry (ponytail — Jira 429s rare at this scale, add backoff when hit); no assignee/engineer edges (item 13 owns identity). Watermark minute-truncation re-fetches a partial minute of overlap — idempotent upsert keeps those counts honest.
 
+## Persistent identity (§9, §15)
+
+Suite: `internal/identity` (resolver unit tests) + acceptance AC-ID-001/002/003 (Memory + live AikoqlStore).
+
+- Every automatic identity decision is a persistent `SourceIdentity` claim, extID `ei.com:identity:<source>:<canonical-key>` (keys `login:x` / `email:x`, noreply addresses decode to login keys), with a `RESOLVES_TO` edge to the canonical `Engineer` and the engineer koid denormalized as `canonical_engineer` for O(1) reuse reads. Claim properties are the reviewable decision (AC-ID-003): source, source_identity, matching_rule, confidence, created_at, resolved_at, canonical_engineer.
+- **Never silently merge**: the only merge condition is an exact canonical-key match. Different keys stay different engineers (`TestResolveConflictingNeverMerges`); cross-source same-key reuse resolves through the other source's claim (`TestResolveCrossSourceSameEmail`, probing is email-only); tenants are isolated (`TestResolveTenantIsolation`); unusable identities (no login, no email) resolve to nothing (`TestResolveUnknownIdentity`); same identity across runs lands on the same engineer (`TestResolveSameIdentityAcrossRuns`).
+- Resolver call economy (pinned by `TestResolveWithinRunUsesCache` with a counting store): a run-local seen cache makes repeat resolutions free; reuse/probe reads the denormalized property instead of traversing; `created` is derived structurally (ponytail: a crash between engineer and claim writes makes the next run miscount New — idempotent upsert means no duplicate). The `RESOLVES_TO` edge itself stays pinned by one traverse-based test (`claimTargetViaEdge`).
+- **Live-budget note**: the aikoql stdio server caps ~120 calls/min per process, and the identity ACs' full-world syncs exceed it — so AC-ID-001/003 run the lean `githubtest.NewIdentityWorld` (org + repo + two commits: ann via noreply, bob via email). Before adding objects to that world, re-run the live leg (`AIKOQL_MCP_BIN` + `-run TestAcceptanceSlice1Aikoql`). Full-world identity behavior remains pinned by AC-KG-004/AC-ID-002 and the resolver suite.
+- No issue→engineer edges yet (ponytail): the vocabulary grows a rel when metrics need "who works on what".
+
 ## AIKOQL wire contract (probe-verified, encoded in internal/knowledge/aikoql.go)
 
 The server is the source of truth; these facts were measured against the live binary, not assumed:

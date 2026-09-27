@@ -29,6 +29,13 @@ func JiraIssueExternalID(site, key string) string {
 	return fmt.Sprintf("jira.com:%s:issue:%s", site, strings.ToUpper(key))
 }
 
+// JiraUserExternalID keys engineers that Jira created (cross-source reuse
+// keeps whichever engineer came first — a github-created engineer keeps its
+// github.com:email: ID even when Jira resolves to it).
+func JiraUserExternalID(site, normEmail string) string {
+	return fmt.Sprintf("jira.com:%s:email:%s", site, normEmail)
+}
+
 // NewJiraProvenance mirrors NewProvenance: source-side facts only — the
 // run-scoped fields are the ingestion layer's job (§10).
 func NewJiraProvenance(sourceURL string, sourceUpdatedAt time.Time) knowledge.Provenance {

@@ -191,6 +191,19 @@ func (w *World) SyncConfig(dir string, store knowledge.KnowledgeStore) github.Co
 	}
 }
 
+// NewIdentityWorld is the lean identity fixture: org + repo + two commits
+// (ann via noreply login, bob via email only) — the identity carriers of the
+// full world, nothing else. The live acceptance leg budgets ~120 aikoql
+// calls per subtest (§15 ACs), and the full world's issues/PRs/reviews are
+// irrelevant to identity resolution.
+func NewIdentityWorld(t *testing.T) *World {
+	w := NewWorld(t)
+	w.issues = nil
+	w.prs = nil
+	w.reviews = nil
+	return w
+}
+
 // AddDeltaActivity mutates the world between runs: issue #1 edited, #4 created.
 func (w *World) AddDeltaActivity() {
 	now := time.Now().UTC()

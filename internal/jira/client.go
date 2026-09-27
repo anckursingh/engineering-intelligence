@@ -57,9 +57,17 @@ type wireIssue struct {
 		IssueType struct {
 			Name string `json:"name"`
 		} `json:"issuetype"`
-		Created string `json:"created"`
-		Updated string `json:"updated"`
+		Created  string   `json:"created"`
+		Updated  string   `json:"updated"`
+		Reporter wireUser `json:"reporter"`
+		Assignee wireUser `json:"assignee"`
 	} `json:"fields"`
+}
+
+// wireUser is the identity-bearing slice of a Jira user (§15).
+type wireUser struct {
+	DisplayName  string `json:"displayName"`
+	EmailAddress string `json:"emailAddress"`
 }
 
 // search fetches one page of the issue search. ponytail: no retry — Jira
@@ -70,7 +78,7 @@ func (c *Client) search(ctx context.Context, jql string, startAt int) (*searchPa
 	q.Set("jql", jql)
 	q.Set("maxResults", "100")
 	q.Set("startAt", strconv.Itoa(startAt))
-	q.Set("fields", "key,summary,status,issuetype,created,updated")
+	q.Set("fields", "key,summary,status,issuetype,created,updated,reporter,assignee")
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)

@@ -39,18 +39,31 @@ type wireIssue struct {
 		IssueType struct {
 			Name string `json:"name"`
 		} `json:"issuetype"`
-		Created string `json:"created"`
-		Updated string `json:"updated"`
+		Created  string   `json:"created"`
+		Updated  string   `json:"updated"`
+		Reporter wireUser `json:"reporter"`
+		Assignee wireUser `json:"assignee"`
 	} `json:"fields"`
 }
 
-func wire(key, summary, status, issueType string, updated time.Time) wireIssue {
-	w := wireIssue{Key: key}
+// wireUser is the identity-bearing slice of a Jira user.
+type wireUser struct {
+	DisplayName  string `json:"displayName"`
+	EmailAddress string `json:"emailAddress"`
+}
+
+func wire(key, summary, status, issueType string, updated time.Time) *wireIssue {
+	w := &wireIssue{Key: key}
 	w.Fields.Summary = summary
 	w.Fields.Status.Name = status
 	w.Fields.IssueType.Name = issueType
 	w.Fields.Created = updated.Add(-24 * time.Hour).Format(time.RFC3339)
 	w.Fields.Updated = updated.Format(time.RFC3339)
+	return w
+}
+
+func (w *wireIssue) withReporter(name, email string) *wireIssue {
+	w.Fields.Reporter = wireUser{DisplayName: name, EmailAddress: email}
 	return w
 }
 
@@ -60,8 +73,10 @@ func NewWorld(t *testing.T) *World {
 	t.Helper()
 	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
 	w := &World{issues: []wireIssue{
-		wire("PLAY-1", "Wobbling widget", "Open", "Bug", t0.Add(24*time.Hour)),
-		wire("PLAY-2", "Widget platform", "In Progress", "Epic", t0.Add(48*time.Hour)),
+		*wire("PLAY-1", "Wobbling widget", "Open", "Bug", t0.Add(24*time.Hour)).
+			withReporter("Bob", "bob@corp.example"),
+		*wire("PLAY-2", "Widget platform", "In Progress", "Epic", t0.Add(48*time.Hour)).
+			withReporter("John Doe", "john.doe@company.com"),
 	}}
 	server := httptest.NewServer(w)
 	t.Cleanup(server.Close)
@@ -76,7 +91,8 @@ func NewWorld(t *testing.T) *World {
 func (w *World) AddDeltaActivity() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.issues = append(w.issues, wire("PLAY-3", "New wobble", "Open", "Bug", time.Now().UTC()))
+	w.issues = append(w.issues, *wire("PLAY-3", "New wobble", "Open", "Bug", time.Now().UTC()).
+		withReporter("Bob", "bob@corp.example"))
 }
 
 // JQLs returns every search JQL the world has seen.

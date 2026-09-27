@@ -71,6 +71,13 @@ func toKnowledgeObject(typeName, externalID string, v any, prov knowledge.Proven
 	}, nil
 }
 
+// KnowledgeObjectWithID maps a typed entity with an explicit external ID —
+// the identity layer needs it for engineers whose creator's ID scheme differs
+// from the per-type default (e.g. a Jira-created Engineer).
+func KnowledgeObjectWithID(typeName, externalID string, v any, prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	return toKnowledgeObject(typeName, externalID, v, prov)
+}
+
 func (o Organization) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
 	return toKnowledgeObject("Organization", OrgExternalID(o.Login), o, prov)
 }

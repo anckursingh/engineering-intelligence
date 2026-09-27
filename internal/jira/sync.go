@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anckursingh/engineering-intelligence/internal/checkpoint"
+	"github.com/anckursingh/engineering-intelligence/internal/identity"
 	"github.com/anckursingh/engineering-intelligence/internal/ingestion"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
@@ -45,6 +46,7 @@ type syncer struct {
 	client   *Client
 	store    knowledge.KnowledgeStore
 	run      *ingestion.Run
+	resolver *identity.Resolver // persistent identity claims (§9, §15)
 	counts   map[string]Count
 	totalNew int
 }
@@ -74,6 +76,9 @@ func (s *syncer) upsert(ko knowledge.KnowledgeObject) error {
 
 // ingest maps one wire issue to the canonical ontology and upserts it (§14:
 // Jira data normalizes into the same canonical concepts, never the reverse).
+// Reporter and assignee resolve through the persistent claim store — the
+// cross-source identity glue of §15. ponytail: no issue→engineer edges yet;
+// the vocabulary grows a rel when metrics need "who works on what".
 func (s *syncer) ingest(w wireIssue) error {
 	updated, err := parseTime(w.Fields.Updated)
 	if err != nil {
@@ -98,7 +103,20 @@ func (s *syncer) ingest(w wireIssue) error {
 	if err != nil {
 		return err
 	}
-	return s.upsert(ko)
+	if err := s.upsert(ko); err != nil {
+		return err
+	}
+	prov := ontology.NewJiraProvenance(s.client.Site()+"/browse/"+key, updated)
+	for _, u := range []wireUser{w.Fields.Reporter, w.Fields.Assignee} {
+		if u.EmailAddress == "" {
+			continue
+		}
+		p := identity.Resolve(u.DisplayName, u.EmailAddress, "")
+		if _, _, err := s.resolver.Resolve(s.ctx, p, prov); err != nil {
+			return fmt.Errorf("jira: resolve identity for %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // Sync runs one incremental Jira synchronization. The JQL is the incremental
@@ -129,11 +147,12 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		store = knowledge.WithTenant(store, cfg.Tenant)
 	}
 	s := &syncer{
-		ctx:    ctx,
-		client: client,
-		store:  store,
-		run:    run,
-		counts: map[string]Count{},
+		ctx:      ctx,
+		client:   client,
+		store:    store,
+		run:      run,
+		resolver: identity.NewResolver(store, run, "jira", client.Site()),
+		counts:   map[string]Count{},
 	}
 
 	jql := fmt.Sprintf("project = %q", cfg.Project)
