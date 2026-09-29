@@ -32,16 +32,19 @@ func TestSyncRun1Full(t *testing.T) {
 		"Issue":        {New: 2},
 		"Commit":       {New: 2},
 		"PullRequest":  {New: 1},
-		"Review":       {New: 1},
-		"Engineer":     {New: 2}, // ann (login, deduped across commit/PR/review) + bob (email)
+		"Review":       {New: 2}, // the approved review + the dismissed one
+		// bob appears twice with no merge: the commit author resolves by email
+		// (bob@corp.example), the requested reviewer by login — GitHub hides
+		// emails in PR data, and the resolver never silently merges the two.
+		"Engineer": {New: 3}, // ann + email-bob + login-bob
 	}
 	for typ, wantC := range want {
 		if got := res.Counts[typ]; got != wantC {
 			t.Errorf("count %s = %+v, want %+v", typ, got, wantC)
 		}
 	}
-	if res.Relationships != 9 {
-		t.Errorf("relationships = %d, want 9", res.Relationships)
+	if res.Relationships != 12 {
+		t.Errorf("relationships = %d, want 12", res.Relationships)
 	}
 
 	// AC-KG-001 mechanics: from the PR, reach repo, issue, author, review,
@@ -151,6 +154,31 @@ func TestSyncPRRichMetadata(t *testing.T) {
 	}
 	if got := pr.Properties["requested_reviewers"]; !reflect.DeepEqual(got, []any{"bob"}) {
 		t.Errorf("requested_reviewers = %v, want [bob]", got)
+	}
+}
+
+// Roadmap Milestone B review lifecycle: the graph distinguishes the five
+// states — requested (REQUESTED_REVIEW, the PR's current request snapshot)
+// and the submitted states, which Review.State carries verbatim including
+// DISMISSED.
+func TestReviewLifecycleStates(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelRequestedReview), knowledge.Outbound, 1,
+		"github.com:user:bob")
+	dismissed, err := store.GetByExternalID(context.Background(), "github.com:review:acme/widgets#3@1002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dismissed.Properties["state"] != "DISMISSED" {
+		t.Errorf("review 1002 state = %v, want DISMISSED", dismissed.Properties["state"])
 	}
 }
 
@@ -387,9 +415,9 @@ func TestSyncCI(t *testing.T) {
 	if got := res.Counts["Build"]; got != (github.Count{New: 4}) {
 		t.Errorf("Build count = %+v, want 4 new", got)
 	}
-	// base 9 relationships + 4 CONTAINS_BUILD + 1 HAS_BUILD (run 200 links PR #3)
-	if res.Relationships != 14 {
-		t.Errorf("relationships = %d, want 14", res.Relationships)
+	// base 12 relationships + 4 CONTAINS_BUILD + 1 HAS_BUILD (run 200 links PR #3)
+	if res.Relationships != 17 {
+		t.Errorf("relationships = %d, want 17", res.Relationships)
 	}
 
 	build, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:200")

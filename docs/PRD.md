@@ -95,6 +95,7 @@ The AI source must expose enough information to distinguish AI-assisted and agen
 - PullRequest IMPLEMENTS Issue
 - PullRequest TARGETS Repository
 - PullRequest REVIEWED_BY Engineer
+- PullRequest REQUESTED_REVIEW Engineer
 - PullRequest PRODUCED_BY AIInteraction
 - AIInteraction USES AIAgent
 - PullRequest HAS_BUILD Build

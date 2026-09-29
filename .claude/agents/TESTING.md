@@ -181,6 +181,15 @@ Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/metric
 - `ci_pass_rate` (new candidate, so the board's Quality section and GET /metrics both grew): success / verdict runs × 100 where a verdict is success|failure|timed_out — cancelled/skipped runs never tested the code and a conclusion-less run is unclassifiable, so neither counts (`TestCIPassRateExact` — 2 success + 1 failure + 1 timed_out + 1 cancelled → 50.0, the 4 verdict builds cited; `TestCIPassRateExcludesNoVerdict`; `TestCIPassRateAbsence` — empty/out-of-window/only-cancelled → nil, silence is not zero). Anchored at completed_at (§19), CALCULATED with every counted Build in evidence.
 - Board: Quality carries ci_pass_rate when builds exist (`TestBoardQualityWithCI` — 3 success + 1 failure → 75.0 %) and the honest note otherwise; the population walk traverses CONTAINS_BUILD outbound (pinned in `TestPopulationFromScope`).
 
+## Review lifecycle (item 37, post-contract — roadmap Milestone B)
+
+Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontology` (`rels.go`).
+
+- The five review-lifecycle states are now distinguishable in the graph: the submitted states live on `Review.State` verbatim (APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED — `TestToReviewStatesVerbatim` pins the pass-through), and "requested" is NOT a Review state — GitHub keeps no request history or timestamps, so the current request set lives on `PullRequest.RequestedReviewers` and the `REQUESTED_REVIEW` edge (PR → Engineer, the request snapshot at sync time; DISMISSED marks the end of a request).
+- `TestReviewLifecycleStates` — PR#3's requested-reviewer bob is reached over REQUESTED_REVIEW (`github.com:user:bob`), and the fixture's second review (`DISMISSED`) stores with state verbatim.
+- Identity honesty (`TestSyncRun1Full` pins): the requested reviewer resolves by login, the commit author by email — GitHub hides emails in PR data and the resolver never silently merges, so request-bob and commit-bob are two Engineers (`{New: 3}`). Reviews `{New: 2}`, base relationships 12 (TestSyncCI 17).
+- Board and GET /metrics stay unchanged (7 definitions).
+
 ## Richer PR metadata (item 36, post-contract — roadmap Milestone B)
 
 Suite: `internal/github` (`normalize_test.go`, `sync_test.go`).

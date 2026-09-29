@@ -453,6 +453,21 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 			}
 		}
 
+		// Requested reviewers: the PR's current request snapshot — GitHub
+		// keeps no request history or timestamps, so this is the request set
+		// at sync time (the submitted states live on Review.State, including
+		// DISMISSED; a requested reviewer never counts as having reviewed).
+		for _, login := range prOnt.RequestedReviewers {
+			person := identity.Resolve("", "", login)
+			engKoid, err := s.engineer(person, ontology.NewProvenance(detail.GetHTMLURL(), prOnt.UpdatedAt))
+			if err != nil {
+				return err
+			}
+			if err := s.relate(prKoid, engKoid, ontology.RelRequestedReview); err != nil {
+				return err
+			}
+		}
+
 		if err := s.syncPRIssues(owner, repo, prKoid, prOnt); err != nil {
 			return err
 		}

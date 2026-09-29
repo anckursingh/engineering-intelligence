@@ -95,12 +95,17 @@ type PullRequest struct {
 }
 
 type Review struct {
-	Repository    string    `json:"repository"`
-	PRNumber      int       `json:"pr_number"`
-	ID            int64     `json:"id"`
-	ReviewerLogin string    `json:"reviewer_login"`
-	State         string    `json:"state"` // APPROVED, CHANGES_REQUESTED, COMMENTED
-	SubmittedAt   time.Time `json:"submitted_at"`
+	Repository    string `json:"repository"`
+	PRNumber      int    `json:"pr_number"`
+	ID            int64  `json:"id"`
+	ReviewerLogin string `json:"reviewer_login"`
+	// State carries GitHub's review states verbatim: APPROVED,
+	// CHANGES_REQUESTED, COMMENTED (submitted without a verdict), DISMISSED.
+	// "requested" is not a Review state — GitHub keeps no request history;
+	// the current request set lives on PullRequest.RequestedReviewers and the
+	// REQUESTED_REVIEW edge.
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submitted_at"`
 }
 
 // Build is defined now so AC-KG-001 can complete next increment; the fetch

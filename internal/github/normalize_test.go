@@ -76,6 +76,19 @@ func TestToPullRequestMapsRicherMetadata(t *testing.T) {
 	}
 }
 
+// Review.State flows verbatim: the lifecycle distinguishes submitted
+// (COMMENTED), approved, changes_requested and dismissed reviews (roadmap
+// Milestone B); "requested" lives on PullRequest.RequestedReviewers, not on
+// a Review — GitHub keeps no request history.
+func TestToReviewStatesVerbatim(t *testing.T) {
+	for _, state := range []string{"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"} {
+		got := toReview(&gh.PullRequestReview{State: strptr(state)}, "acme", "widgets", 3)
+		if got.State != state {
+			t.Errorf("state %s mapped to %q", state, got.State)
+		}
+	}
+}
+
 // toBuild maps a workflow run. The list endpoint carries no completed_at:
 // a completed run's updated_at is its completion (GitHub stops touching the
 // record once the run finishes), an unfinished run has no completion time.

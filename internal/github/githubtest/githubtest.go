@@ -171,13 +171,23 @@ func NewWorld(t *testing.T) *World {
 			UpdatedAt:      tst(t0.Add(31 * time.Hour)),
 			MergedAt:       tst(t0.Add(31 * time.Hour)),
 		}},
-		reviews: []*gh.PullRequestReview{{
-			ID:          int64ptr(1001),
-			User:        &gh.User{Login: strptr("ann")},
-			State:       strptr("APPROVED"),
-			HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1001"),
-			SubmittedAt: tst(t0.Add(30*time.Hour + 30*time.Minute)),
-		}},
+		reviews: []*gh.PullRequestReview{
+			{
+				ID:          int64ptr(1001),
+				User:        &gh.User{Login: strptr("ann")},
+				State:       strptr("APPROVED"),
+				HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1001"),
+				SubmittedAt: tst(t0.Add(30*time.Hour + 30*time.Minute)),
+			},
+			{
+				// The dismissed leg of the lifecycle: state flows verbatim.
+				ID:          int64ptr(1002),
+				User:        &gh.User{Login: strptr("ann")},
+				State:       strptr("DISMISSED"),
+				HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1002"),
+				SubmittedAt: tst(t0.Add(30*time.Hour + 45*time.Minute)),
+			},
+		},
 		// The single-PR GET for #3: the richer record (labels/draft/merge
 		// method/requested reviewers) in wire form — a raw map, since the
 		// connector decodes it directly.

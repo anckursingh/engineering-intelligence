@@ -35,6 +35,15 @@ package ontology
 //	                cardinality: N:M
 //	                test: AC-KG-001 + tenant-scoped resolution test
 //
+//	REQUESTED_REVIEW source PullRequest → target Engineer
+//	                meaning: the PR's current requested-reviewers snapshot —
+//	                GitHub keeps no request history or timestamps, so the
+//	                edge is the request set at sync time, not a lifecycle
+//	                event (a Review with State "DISMISSED" marks the end)
+//	                inverse: requested review (inbound traversal)
+//	                cardinality: N:M
+//	                test: TestReviewLifecycleStates
+//
 //	MERGED_AS       source PullRequest → target Commit
 //	                meaning: the PR merged as this commit
 //	                inverse: merged-as (inbound traversal)
@@ -77,15 +86,16 @@ package ontology
 type RelType string
 
 const (
-	RelBelongsTo      RelType = "BELONGS_TO"
-	RelAuthored       RelType = "AUTHORED"
-	RelImplements     RelType = "IMPLEMENTS"
-	RelTargets        RelType = "TARGETS"
-	RelReviewedBy     RelType = "REVIEWED_BY"
-	RelMergedAs       RelType = "MERGED_AS"
-	RelContainsReview RelType = "CONTAINS_REVIEW"
-	RelContainsBuild  RelType = "CONTAINS_BUILD"
-	RelHasBuild       RelType = "HAS_BUILD" // PullRequest → Build; outcome lives on the Build
-	RelResolvesTo     RelType = "RESOLVES_TO"
-	RelAIContributes  RelType = "AI_CONTRIBUTES"
+	RelBelongsTo       RelType = "BELONGS_TO"
+	RelAuthored        RelType = "AUTHORED"
+	RelImplements      RelType = "IMPLEMENTS"
+	RelTargets         RelType = "TARGETS"
+	RelReviewedBy      RelType = "REVIEWED_BY"
+	RelRequestedReview RelType = "REQUESTED_REVIEW" // PullRequest → Engineer; current request snapshot
+	RelMergedAs        RelType = "MERGED_AS"
+	RelContainsReview  RelType = "CONTAINS_REVIEW"
+	RelContainsBuild   RelType = "CONTAINS_BUILD"
+	RelHasBuild        RelType = "HAS_BUILD" // PullRequest → Build; outcome lives on the Build
+	RelResolvesTo      RelType = "RESOLVES_TO"
+	RelAIContributes   RelType = "AI_CONTRIBUTES"
 )
