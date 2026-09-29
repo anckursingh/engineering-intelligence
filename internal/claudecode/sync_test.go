@@ -288,8 +288,8 @@ func TestSyncWritesTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if res.Sessions != 1 || res.Relationships != 4 || res.Unlinked != 0 {
-		t.Errorf("result = %+v, want 1 session, 4 edges (2 AI_CONTRIBUTES + 2 AUTHORED), 0 unlinked", res)
+	if res.Sessions != 1 || res.Relationships != 11 || res.Unlinked != 0 {
+		t.Errorf("result = %+v, want 1 session, 11 edges (2 AI_CONTRIBUTES + 2 AUTHORED + 7 session containment), 0 unlinked", res)
 	}
 	wantCounts := map[string]int{
 		"CodingSession": 1, "Interaction": 1, "AgentRun": 3, "AgentTask": 3, "CodeContribution": 2,
@@ -388,6 +388,46 @@ func TestSyncAgentTaskLinks(t *testing.T) {
 	got, err = store.Traverse(context.Background(), task2.Koid, string(ontology.RelAuthored), knowledge.Outbound, 1)
 	if err != nil || len(got) != 0 {
 		t.Errorf("task2 AUTHORED = %v, %v, want none", got, err)
+	}
+}
+
+// TestSyncSessionContainment: the session contains its interactions, runs
+// and tasks — the graph path the population walk (intelligence) uses to
+// reach telemetry from a PR-scoped contribution (Milestone E board).
+func TestSyncSessionContainment(t *testing.T) {
+	store := knowledge.NewMemory()
+	dir := writeTranscript(t, "s1.jsonl", fixtureTranscript())
+	if _, err := Sync(context.Background(), syncCfg(dir, store)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	session, err := store.GetByExternalID(context.Background(), "ei.com:coding-session:claude-code:s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[ontology.RelType][]string{
+		ontology.RelContainsInteraction: {"ei.com:interaction:claude-code:u1"},
+		ontology.RelContainsRun:         {"ei.com:agent-run:claude-code:a1", "ei.com:agent-run:claude-code:a2", "ei.com:agent-run:claude-code:a3"},
+		ontology.RelContainsTask:        {"ei.com:agent-task:claude-code:toolu_1", "ei.com:agent-task:claude-code:toolu_2", "ei.com:agent-task:claude-code:toolu_3"},
+	}
+	for rel, ids := range want {
+		got, err := store.Traverse(context.Background(), session.Koid, string(rel), knowledge.Outbound, 1)
+		if err != nil {
+			t.Fatalf("traverse %s: %v", rel, err)
+		}
+		if len(got) != len(ids) {
+			t.Fatalf("%s = %d children, want %d", rel, len(got), len(ids))
+		}
+		for _, ko := range got {
+			found := false
+			for _, id := range ids {
+				if ko.ExternalID == id {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s reached unexpected %s", rel, ko.ExternalID)
+			}
+		}
 	}
 }
 

@@ -105,6 +105,26 @@ package ontology
 //	                cardinality: 1:N
 //	                test: TestSyncReleases
 //
+//	CONTAINS_INTERACTION source CodingSession → target Interaction
+//	                meaning: the interaction happened inside the session
+//	                inverse: session containing the interaction (inbound)
+//	                cardinality: 1:N
+//	                test: TestSyncSessionContainment
+//
+//	CONTAINS_RUN    source CodingSession → target AgentRun
+//	                meaning: the run happened inside the session
+//	                inverse: session containing the run (inbound)
+//	                cardinality: 1:N
+//	                test: TestSyncSessionContainment
+//
+//	CONTAINS_TASK   source CodingSession → target AgentTask
+//	                meaning: the task ran inside the session; together with
+//	                AUTHORED it is the path the population walk uses to reach
+//	                telemetry from a PR-scoped contribution
+//	                inverse: session containing the task (inbound)
+//	                cardinality: 1:N
+//	                test: TestSyncSessionContainment
+//
 //	RESOLVES_TO     source SourceIdentity → target Engineer
 //	                meaning: this source identity is that canonical engineer;
 //	                identity-layer edge, never a source-domain fact
@@ -120,20 +140,23 @@ package ontology
 type RelType string
 
 const (
-	RelBelongsTo       RelType = "BELONGS_TO"
-	RelAuthored        RelType = "AUTHORED" // Engineer → Commit|PR; AgentTask → CodeContribution
-	RelImplements      RelType = "IMPLEMENTS"
-	RelPartOf          RelType = "PART_OF" // Commit → PullRequest; from the PR's commit list
-	RelTargets         RelType = "TARGETS"
-	RelReviewedBy      RelType = "REVIEWED_BY"
-	RelRequestedReview RelType = "REQUESTED_REVIEW" // PullRequest → Engineer; current request snapshot
-	RelMergedAs        RelType = "MERGED_AS"
-	RelContainsReview  RelType = "CONTAINS_REVIEW"
-	RelContainsBuild   RelType = "CONTAINS_BUILD"
-	RelHasBuild        RelType = "HAS_BUILD"        // PullRequest → Build; outcome lives on the Build
-	RelProduced        RelType = "PRODUCED"         // Build → Deployment; sha association, never causation
-	RelAffects         RelType = "AFFECTS"          // Deployment → Service
-	RelContainsRelease RelType = "CONTAINS_RELEASE" // Repository → Release
-	RelResolvesTo      RelType = "RESOLVES_TO"
-	RelAIContributes   RelType = "AI_CONTRIBUTES"
+	RelBelongsTo           RelType = "BELONGS_TO"
+	RelAuthored            RelType = "AUTHORED" // Engineer → Commit|PR; AgentTask → CodeContribution
+	RelImplements          RelType = "IMPLEMENTS"
+	RelPartOf              RelType = "PART_OF" // Commit → PullRequest; from the PR's commit list
+	RelTargets             RelType = "TARGETS"
+	RelReviewedBy          RelType = "REVIEWED_BY"
+	RelRequestedReview     RelType = "REQUESTED_REVIEW" // PullRequest → Engineer; current request snapshot
+	RelMergedAs            RelType = "MERGED_AS"
+	RelContainsReview      RelType = "CONTAINS_REVIEW"
+	RelContainsBuild       RelType = "CONTAINS_BUILD"
+	RelHasBuild            RelType = "HAS_BUILD"            // PullRequest → Build; outcome lives on the Build
+	RelProduced            RelType = "PRODUCED"             // Build → Deployment; sha association, never causation
+	RelAffects             RelType = "AFFECTS"              // Deployment → Service
+	RelContainsRelease     RelType = "CONTAINS_RELEASE"     // Repository → Release
+	RelContainsInteraction RelType = "CONTAINS_INTERACTION" // CodingSession → Interaction
+	RelContainsRun         RelType = "CONTAINS_RUN"         // CodingSession → AgentRun
+	RelContainsTask        RelType = "CONTAINS_TASK"        // CodingSession → AgentTask
+	RelResolvesTo          RelType = "RESOLVES_TO"
+	RelAIContributes       RelType = "AI_CONTRIBUTES"
 )

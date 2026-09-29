@@ -131,6 +131,32 @@ func ingestFile(ctx context.Context, run *ingestion.Run, store knowledge.Knowled
 		koids[i] = koid
 	}
 
+	// Session containment: the graph path the population walk (intelligence)
+	// uses to reach telemetry from a PR-scoped contribution — contribution →
+	// AUTHORED inbound → task → CONTAINS_TASK inbound → session → children.
+	// Without these edges the interaction/run/task metrics are unreachable
+	// from any org scope (Milestone E board).
+	relateChildren := func(rel ontology.RelType, first, n int) error {
+		for i := 0; i < n; i++ {
+			if _, err := run.Apply(ctx, store, ingestion.Mutation{Relationships: []knowledge.Relationship{{
+				Type: string(rel), From: koids[0], To: koids[first+i],
+			}}}); err != nil {
+				return fmt.Errorf("claudecode: relate %s: %w", rel, err)
+			}
+			res.Relationships++
+		}
+		return nil
+	}
+	if err := relateChildren(ontology.RelContainsInteraction, 1, len(p.interactions)); err != nil {
+		return err
+	}
+	if err := relateChildren(ontology.RelContainsRun, 1+len(p.interactions), len(p.runs)); err != nil {
+		return err
+	}
+	if err := relateChildren(ontology.RelContainsTask, 1+len(p.interactions)+len(p.runs), len(p.tasks)); err != nil {
+		return err
+	}
+
 	// Task koids by tool_use id: the AgentTask → CodeContribution link
 	// (AUTHORED). The contribution's id embeds the producing task's tool_use
 	// id (sessionID:tool_use — both carry no colons), so the join needs no

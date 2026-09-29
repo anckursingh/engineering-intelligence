@@ -5,6 +5,7 @@
 package intelligence
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -212,6 +213,101 @@ func TestBoardQualityWithCI(t *testing.T) {
 	if quality.Note != "" {
 		t.Errorf("Quality note = %q, want none when data exists", quality.Note)
 	}
+}
+
+// TestBoardAIWorkflowMetrics: with AI telemetry linked to the scope, the AI
+// Development section carries the workflow dimension (§27, Milestone E) —
+// volume, task outcomes, and cost alongside the assisted-PR share, in the
+// metric set's order.
+func TestBoardAIWorkflowMetrics(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	sep := func(day int) time.Time { return time.Date(2026, 9, day, 0, 0, 0, 0, time.UTC) }
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	pr := upsert(t, store, mapKO(t, ontology.PullRequest{
+		Repository: "acme/widgets", Number: 42, Merged: true, CreatedAt: sep(1), MergedAt: sep(5),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: pr.Koid, To: repo.Koid})
+
+	session := upsert(t, store, mapKO(t, ontology.CodingSession{Source: "claude-code", SessionID: "s1", StartedAt: sep(1)}.KnowledgeObject, prov))
+	for _, id := range []string{"i1", "i2"} {
+		ko := upsert(t, store, mapKO(t, ontology.Interaction{Source: "claude-code", ID: id, StartedAt: sep(2)}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsInteraction), From: session.Koid, To: ko.Koid})
+	}
+	for _, r := range []struct {
+		id   string
+		cost float64
+	}{{"r1", 1.0}, {"r2", 2.0}} {
+		ko := upsert(t, store, mapKO(t, ontology.AgentRun{Source: "claude-code", ID: r.id, StartedAt: sep(2), Status: "completed", CostUSD: r.cost}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsRun), From: session.Koid, To: ko.Koid})
+	}
+	// 4 finished tasks: 3 completed (one intervened), one failed with retries
+	// — completion 75%, intervention 25%, retry 50%, cost/task 3.0/3 = 1.0.
+	tasks := []ontology.AgentTask{
+		{Source: "claude-code", ID: "t1", Status: "completed", CompletedAt: sep(3)},
+		{Source: "claude-code", ID: "t2", Status: "completed", HumanIntervention: true, CompletedAt: sep(3)},
+		{Source: "claude-code", ID: "t3", Status: "failed", Retries: 2, CompletedAt: sep(4)},
+		{Source: "claude-code", ID: "t4", Status: "completed", Retries: 1, CompletedAt: sep(4)},
+	}
+	for _, tk := range tasks {
+		ko := upsert(t, store, mapKO(t, tk.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: ko.Koid})
+	}
+	contrib := upsert(t, store, mapKO(t, ontology.CodeContribution{
+		Source: "claude-code", ID: "c1", Repository: "acme/widgets", PRNumber: 42,
+		Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contrib.Koid, To: pr.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAuthored), From: storeMust(t, store, "ei.com:agent-task:claude-code:t1").Koid, To: contrib.Koid})
+
+	api := NewAPI(store)
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, boardURL, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /board = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got board
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	ai := got.Sections[3]
+	want := []boardItem{
+		{Metric: "ai_assisted_pr_pct", Value: 100.0, Unit: "%"},
+		{Metric: "ai_interaction_volume", Value: 2.0, Unit: "interactions"},
+		{Metric: "ai_run_volume", Value: 2.0, Unit: "runs"},
+		{Metric: "ai_task_completion", Value: 75.0, Unit: "%"},
+		{Metric: "human_intervention_rate", Value: 25.0, Unit: "%"},
+		{Metric: "retry_rate", Value: 50.0, Unit: "%"},
+		{Metric: "ai_cost", Value: 3.0, Unit: "USD"},
+		{Metric: "cost_per_completed_task", Value: 1.0, Unit: "USD"},
+	}
+	if len(ai.Items) != len(want) {
+		t.Fatalf("AI items = %d, want %d", len(ai.Items), len(want))
+	}
+	for i, w := range want {
+		it := ai.Items[i]
+		if it.Metric != w.Metric || it.Value != w.Value || it.Unit != w.Unit {
+			t.Errorf("AI item %d = %+v, want metric %s value %.1f unit %s", i, it, w.Metric, w.Value, w.Unit)
+		}
+		if it.EpistemicState != "CALCULATED" || len(it.Evidence) == 0 {
+			t.Errorf("AI item %s lacks evidence: %+v", it.Metric, it)
+		}
+	}
+	if ai.Note != "" {
+		t.Errorf("AI note = %q, want none when telemetry exists", ai.Note)
+	}
+}
+
+// storeMust fetches a stored object by external id; test helper.
+func storeMust(t *testing.T, store knowledge.KnowledgeStore, extID string) knowledge.KnowledgeObject {
+	t.Helper()
+	ko, err := store.GetByExternalID(context.Background(), extID)
+	if err != nil {
+		t.Fatalf("get %s: %v", extID, err)
+	}
+	return ko
 }
 
 // TestBoardLiveAikoql: the board against the real store.

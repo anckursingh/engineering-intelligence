@@ -14,12 +14,10 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
-// Population walks org → repos → PRs → reviews + AI contributions and
-// returns the typed objects with their store external IDs.
-// ponytail: org scope only — repo scoping joins when a question needs it;
-// run/task/interaction metrics are unreachable here because telemetry
-// objects carry no org/repo edge — a telemetry connector that links them
-// joins the candidate set then.
+// Population walks org → repos → PRs → reviews + AI contributions, then the
+// telemetry each contribution reaches (task → session → interactions, runs,
+// tasks) and returns the typed objects with their store external IDs.
+// ponytail: org scope only — repo scoping joins when a question needs it.
 func Population(ctx context.Context, store knowledge.KnowledgeStore, scope string) (metrics.Population, error) {
 	var pop metrics.Population
 	org, err := store.GetByExternalID(ctx, scope)
@@ -73,6 +71,38 @@ func Population(ctx context.Context, store knowledge.KnowledgeStore, scope strin
 					return pop, fmt.Errorf("intelligence: decode AI contribution %s: %w", co.ExternalID, err)
 				}
 				pop.CodeContributions = append(pop.CodeContributions, metrics.Entity[ontology.CodeContribution]{ExternalID: co.ExternalID, Value: c})
+				// Telemetry reach (§27): the contribution's producing task
+				// (AUTHORED inbound) leads to the session, which contains the
+				// interactions, runs and tasks the AI workflow metrics read.
+				// Edges only — a contribution without a task link leaves its
+				// session's telemetry out of this population (honest absence).
+				tasks, err := store.Traverse(ctx, co.Koid, string(ontology.RelAuthored), knowledge.Inbound, 1)
+				if err != nil {
+					return pop, fmt.Errorf("intelligence: traverse task of AI contribution %s: %w", co.ExternalID, err)
+				}
+				for _, tko := range tasks {
+					if tko.TypeName != "AgentTask" {
+						continue
+					}
+					sessions, err := store.Traverse(ctx, tko.Koid, string(ontology.RelContainsTask), knowledge.Inbound, 1)
+					if err != nil {
+						return pop, fmt.Errorf("intelligence: traverse session of task %s: %w", tko.ExternalID, err)
+					}
+					for _, sko := range sessions {
+						if sko.TypeName != "CodingSession" {
+							continue
+						}
+						if err := collectTelemetry[ontology.Interaction](ctx, store, sko.Koid, ontology.RelContainsInteraction, "Interaction", &pop.Interactions); err != nil {
+							return pop, err
+						}
+						if err := collectTelemetry[ontology.AgentRun](ctx, store, sko.Koid, ontology.RelContainsRun, "AgentRun", &pop.AgentRuns); err != nil {
+							return pop, err
+						}
+						if err := collectTelemetry[ontology.AgentTask](ctx, store, sko.Koid, ontology.RelContainsTask, "AgentTask", &pop.AgentTasks); err != nil {
+							return pop, err
+						}
+					}
+				}
 			}
 		}
 	}
@@ -91,4 +121,26 @@ func convert[T any](ko knowledge.KnowledgeObject) (T, error) {
 		return v, err
 	}
 	return v, nil
+}
+
+// collectTelemetry walks one containment edge from the session and appends
+// the decoded children of the given type. Duplicate visits (a session
+// reached through several contributions) are left in — every metric reading
+// this population dedupes by external ID.
+func collectTelemetry[T any](ctx context.Context, store knowledge.KnowledgeStore, from string, rel ontology.RelType, typ string, dst *[]metrics.Entity[T]) error {
+	kos, err := store.Traverse(ctx, from, string(rel), knowledge.Outbound, 1)
+	if err != nil {
+		return fmt.Errorf("intelligence: traverse %s: %w", rel, err)
+	}
+	for _, ko := range kos {
+		if ko.TypeName != typ {
+			continue
+		}
+		v, err := convert[T](ko)
+		if err != nil {
+			return fmt.Errorf("intelligence: decode %s %s: %w", typ, ko.ExternalID, err)
+		}
+		*dst = append(*dst, metrics.Entity[T]{ExternalID: ko.ExternalID, Value: v})
+	}
+	return nil
 }

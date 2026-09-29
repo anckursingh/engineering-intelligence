@@ -41,9 +41,27 @@ type board struct {
 	Sections []boardSection `json:"sections"`
 }
 
+// aiBoardMetrics is the AI Development section's metric set (§27, Milestone
+// E): the workflow dimension — volume, task outcomes, cost — alongside the
+// assisted-PR share. Each is computed when the population carries the
+// telemetry; absence stays an honest gap, never a zero.
+var aiBoardMetrics = []struct {
+	name, label, unit string
+	compute           func(metrics.Population, metrics.Window) []metrics.Observation
+}{
+	{"ai_assisted_pr_pct", "AI-assisted PR percentage", "%", metrics.AIAssistedPRPct},
+	{"ai_interaction_volume", "AI interaction volume", "interactions", metrics.AIInteractionVolume},
+	{"ai_run_volume", "AI run volume", "runs", metrics.AIRunVolume},
+	{"ai_task_completion", "AI task completion", "%", metrics.AgentTaskCompletion},
+	{"human_intervention_rate", "Human intervention rate", "%", metrics.HumanInterventionRate},
+	{"retry_rate", "Retry rate", "%", metrics.RetryRate},
+	{"ai_cost", "AI cost", "USD", metrics.AICost},
+	{"cost_per_completed_task", "Cost per completed task", "USD", metrics.CostPerCompletedTask},
+}
+
 // buildBoard computes the board for one window over one Population. The
-// candidates table is the metric registry: 0-2 are the flow set, 3 is the
-// AI-assisted share (the org-reachable AI metric).
+// candidates table is the metric registry: 0-2 are the flow set, 4 the
+// quality set; the AI Development section runs its own §27 metric set.
 func buildBoard(pop metrics.Population, win metrics.Window) board {
 	var flow, ai, quality []boardItem
 	for _, c := range []candidate{candidates[0], candidates[1], candidates[2]} {
@@ -52,9 +70,11 @@ func buildBoard(pop metrics.Population, win metrics.Window) board {
 				EpistemicState: evidence.StateCalculated.String(), Evidence: ev})
 		}
 	}
-	if v, ok, ev := summarize(candidates[3].compute(pop, win)); ok {
-		ai = append(ai, boardItem{Metric: candidates[3].name, Label: candidates[3].label, Value: v, Unit: candidates[3].unit,
-			EpistemicState: evidence.StateCalculated.String(), Evidence: ev})
+	for _, m := range aiBoardMetrics {
+		if v, ok, ev := summarize(m.compute(pop, win)); ok {
+			ai = append(ai, boardItem{Metric: m.name, Label: m.label, Value: v, Unit: m.unit,
+				EpistemicState: evidence.StateCalculated.String(), Evidence: ev})
+		}
 	}
 	if v, ok, ev := summarize(candidates[4].compute(pop, win)); ok {
 		quality = append(quality, boardItem{Metric: candidates[4].name, Label: candidates[4].label, Value: v, Unit: candidates[4].unit,

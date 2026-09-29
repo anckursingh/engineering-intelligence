@@ -117,6 +117,48 @@ func TestPopulationFromScope(t *testing.T) {
 	}
 }
 
+// TestPopulationCollectsTelemetry: the walk reaches the session's
+// interactions, runs and tasks through the contribution's producing task —
+// contribution → AUTHORED inbound → task → CONTAINS_TASK inbound → session →
+// children. The path that feeds the board's AI workflow metrics (§27).
+func TestPopulationCollectsTelemetry(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	sep := func(day int) time.Time { return time.Date(2026, 9, day, 0, 0, 0, 0, time.UTC) }
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	pr := upsert(t, store, mapKO(t, ontology.PullRequest{
+		Repository: "acme/widgets", Number: 1, Merged: true, CreatedAt: sep(1), MergedAt: sep(5),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: pr.Koid, To: repo.Koid})
+
+	session := upsert(t, store, mapKO(t, ontology.CodingSession{Source: "claude-code", SessionID: "s1", StartedAt: sep(1)}.KnowledgeObject, prov))
+	i1 := upsert(t, store, mapKO(t, ontology.Interaction{Source: "claude-code", ID: "i1", StartedAt: sep(2)}.KnowledgeObject, prov))
+	r1 := upsert(t, store, mapKO(t, ontology.AgentRun{Source: "claude-code", ID: "r1", StartedAt: sep(2), Status: "completed", CostUSD: 1.5}.KnowledgeObject, prov))
+	t1 := upsert(t, store, mapKO(t, ontology.AgentTask{Source: "claude-code", ID: "t1", Status: "completed", CompletedAt: sep(3)}.KnowledgeObject, prov))
+	t2 := upsert(t, store, mapKO(t, ontology.AgentTask{Source: "claude-code", ID: "t2", Status: "failed", Retries: 1, CompletedAt: sep(4)}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsInteraction), From: session.Koid, To: i1.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsRun), From: session.Koid, To: r1.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: t1.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: t2.Koid})
+	contrib := upsert(t, store, mapKO(t, ontology.CodeContribution{
+		Source: "claude-code", ID: "c1", Repository: "acme/widgets", PRNumber: 1,
+		Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contrib.Koid, To: pr.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAuthored), From: t1.Koid, To: contrib.Koid})
+
+	pop, err := Population(context.Background(), store, ontology.OrgExternalID("acme"))
+	if err != nil {
+		t.Fatalf("population: %v", err)
+	}
+	if len(pop.Interactions) != 1 || len(pop.AgentRuns) != 1 || len(pop.AgentTasks) != 2 || len(pop.CodeContributions) != 1 {
+		t.Fatalf("population = %d interactions, %d runs, %d tasks, %d contributions; want 1/1/2/1",
+			len(pop.Interactions), len(pop.AgentRuns), len(pop.AgentTasks), len(pop.CodeContributions))
+	}
+}
+
 // TestPopulationFromUserScope: a user account scope root walks exactly like
 // an org one — the graph shape is identical, only the root type differs.
 func TestPopulationFromUserScope(t *testing.T) {

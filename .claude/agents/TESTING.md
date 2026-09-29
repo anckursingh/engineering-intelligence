@@ -210,6 +210,17 @@ Suite: `internal/claudecode` (`sync_test.go`), `internal/ontology` (`rels.go`).
 - `TestSyncAgentTaskLinks` — toolu_1's outbound AUTHORED reaches exactly its contribution, which reaches the seeded PR (the AgentTask → CodeContribution → PR chain); toolu_2 (Bash, no code) has no AUTHORED outbound. TestSyncWritesTelemetry's relationships pin grew 2 → 4.
 - Milestone D's exit graph AgentTask → CodeContribution → PR → Build reconstructs: the task leg here, PR → Build by TestSyncCI (HAS_BUILD). Not built (absent from the transcript or the exit graph): Engineer → Interaction (no human identity in transcripts), Interaction → AgentRun (pairing unrecorded), Agent/Model/AgentOutcome entities (model is an attribute on every object already).
 
+## AI workflow metrics on the board (item 43, post-contract — roadmap Milestone E)
+
+Suite: `internal/intelligence` (`board.go`, `board_test.go`, `population.go`, `population_test.go`), `internal/claudecode` (`sync.go`, `sync_test.go`), `internal/ontology` (`rels.go`).
+
+- The AI Development section runs the §27 metric set (Milestone E list): ai_assisted_pr_pct, ai_interaction_volume, ai_run_volume, ai_task_completion, human_intervention_rate, retry_rate, ai_cost, cost_per_completed_task — a workflow dimension, not a single adoption counter. Each renders only when its objects exist in the population (absence is an honest gap, never a zero).
+- Reach: the claudecode connector now links each session to its children — CONTAINS_INTERACTION / CONTAINS_RUN / CONTAINS_TASK (CodingSession → child, 1:N) — and the population walk extends to contribution → AUTHORED inbound → task → CONTAINS_TASK inbound → session → children. Edges only: a contribution without a task link leaves its session's telemetry out of the population.
+- `TestSyncSessionContainment` — the session's outbound containment reaches exactly its 1 interaction / 3 runs / 3 tasks from the canonical fixture. TestSyncWritesTelemetry's relationships pin grew 4 → 11.
+- `TestPopulationCollectsTelemetry` — through one PR-scoped contribution the walk collects 1 interaction, 1 run, 2 tasks (the session's full task set, not just the AUTHORED one).
+- `TestBoardAIWorkflowMetrics` — with telemetry linked, the AI section lists all eight items in order with pinned values (100.0% assisted, 2 interactions, 2 runs, 75.0% completion, 25.0% intervention, 50.0% retry, 3.0 USD cost, 1.0 USD/task), CALCULATED with evidence each, no note. The §23 fixture still renders only ai_assisted_pr_pct (its zero is real — merged PRs, no contributions) and the empty-window board still notes "no AI telemetry linked to this scope" (TestBoardSections, TestBoardEmptyWindow).
+- Deliberately deferred: "AI-assisted vs non-AI-attributed comparisons" lands with Milestone F's population comparison (comparisons live there, §22); the investigation's candidate factors stay unchanged (the seven new metrics join when a question needs them).
+
 ## Releases (item 41, post-contract — roadmap Milestone C)
 
 Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontology` (`rels.go`).
