@@ -23,6 +23,15 @@ package ontology
 //	                cardinality: N:M
 //	                test: AC-KG-001 + TestPRToIssueLinks (§13.4)
 //
+//	PART_OF         source Commit → target PullRequest
+//	                meaning: the commit belongs to the PR's branch — ingested
+//	                from the PR's own commit list, which the default-branch
+//	                walk never sees
+//	                inverse: PR containing the commit (inbound traversal)
+//	                cardinality: N:M (a PR rebases and force-pushes; the
+//	                superseded commits keep their edges)
+//	                test: TestSyncPRCommits
+//
 //	TARGETS         source PullRequest → target Repository
 //	                meaning: the PR is raised against the repo
 //	                inverse: targeted by (inbound traversal)
@@ -89,6 +98,7 @@ const (
 	RelBelongsTo       RelType = "BELONGS_TO"
 	RelAuthored        RelType = "AUTHORED"
 	RelImplements      RelType = "IMPLEMENTS"
+	RelPartOf          RelType = "PART_OF" // Commit → PullRequest; from the PR's commit list
 	RelTargets         RelType = "TARGETS"
 	RelReviewedBy      RelType = "REVIEWED_BY"
 	RelRequestedReview RelType = "REQUESTED_REVIEW" // PullRequest → Engineer; current request snapshot

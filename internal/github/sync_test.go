@@ -30,9 +30,10 @@ func TestSyncRun1Full(t *testing.T) {
 		"Organization": {New: 1},
 		"Repository":   {New: 1},
 		"Issue":        {New: 2},
-		"Commit":       {New: 2},
-		"PullRequest":  {New: 1},
-		"Review":       {New: 2}, // the approved review + the dismissed one
+		// ShaA + ShaB from the default branch, PrSha from PR#3's commit list
+		"Commit":      {New: 3},
+		"PullRequest": {New: 1},
+		"Review":      {New: 2}, // the approved review + the dismissed one
 		// bob appears twice with no merge: the commit author resolves by email
 		// (bob@corp.example), the requested reviewer by login — GitHub hides
 		// emails in PR data, and the resolver never silently merges the two.
@@ -43,8 +44,11 @@ func TestSyncRun1Full(t *testing.T) {
 			t.Errorf("count %s = %+v, want %+v", typ, got, wantC)
 		}
 	}
-	if res.Relationships != 12 {
-		t.Errorf("relationships = %d, want 12", res.Relationships)
+	// base 12 + PART_OF (PrSha → PR#3) + PrSha's author edge — PrSha's author
+	// is the same noreply ann as ShaA's, so no new engineer, but the write
+	// was issued and the call counter sees it.
+	if res.Relationships != 14 {
+		t.Errorf("relationships = %d, want 14", res.Relationships)
 	}
 
 	// AC-KG-001 mechanics: from the PR, reach repo, issue, author, review,
@@ -124,8 +128,8 @@ func TestSyncSkipsEmptyRepo(t *testing.T) {
 	if got := res.Counts["Repository"]; got != (github.Count{New: 2}) {
 		t.Errorf("Repository count = %+v, want 2 (the empty repo itself is synced)", got)
 	}
-	if got := res.Counts["Commit"]; got != (github.Count{New: 2}) {
-		t.Errorf("Commit count = %+v, want 2 (the empty repo contributes none)", got)
+	if got := res.Counts["Commit"]; got != (github.Count{New: 3}) {
+		t.Errorf("Commit count = %+v, want 3 (widgets: ShaA, ShaB, PR#3's PrSha; the empty repo contributes none)", got)
 	}
 }
 
@@ -180,6 +184,31 @@ func TestReviewLifecycleStates(t *testing.T) {
 	if dismissed.Properties["state"] != "DISMISSED" {
 		t.Errorf("review 1002 state = %v, want DISMISSED", dismissed.Properties["state"])
 	}
+}
+
+// Roadmap Milestone B: commit ↔ PR links. PR-branch commits never reach the
+// default-branch walk, so the PR's own commit list ingests them and links
+// each with PART_OF (Commit → PullRequest) — the graph reconstructs
+// Engineer → Commit → PR.
+func TestSyncPRCommits(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelPartOf), knowledge.Inbound, 1,
+		"github.com:commit:acme/widgets@"+githubtest.PrSha)
+	commit, err := store.GetByExternalID(context.Background(), "github.com:commit:acme/widgets@"+githubtest.PrSha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same noreply identity as ShaA's author: one ann, not a second engineer.
+	githubtest.AssertReaches(t, store, commit.Koid, string(ontology.RelAuthored), knowledge.Inbound, 1,
+		"github.com:user:ann")
 }
 
 func TestSyncRun2Delta(t *testing.T) {
@@ -415,9 +444,9 @@ func TestSyncCI(t *testing.T) {
 	if got := res.Counts["Build"]; got != (github.Count{New: 4}) {
 		t.Errorf("Build count = %+v, want 4 new", got)
 	}
-	// base 12 relationships + 4 CONTAINS_BUILD + 1 HAS_BUILD (run 200 links PR #3)
-	if res.Relationships != 17 {
-		t.Errorf("relationships = %d, want 17", res.Relationships)
+	// base 14 relationships + 4 CONTAINS_BUILD + 1 HAS_BUILD (run 200 links PR #3)
+	if res.Relationships != 19 {
+		t.Errorf("relationships = %d, want 19", res.Relationships)
 	}
 
 	build, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:200")

@@ -24,13 +24,15 @@ import (
 )
 
 // Fixture SHAs (the acme/widgets default branch). Squash/Rebase are the
-// merge-kind variants (§13.3); Dead is a merge SHA absent from history.
+// merge-kind variants (§13.3); Dead is a merge SHA absent from history;
+// PrSha lives only on PR#3's branch — never on the default branch.
 var (
 	ShaA      = strings.Repeat("a", 40)
 	ShaB      = strings.Repeat("b", 40)
 	SquashSha = strings.Repeat("c", 40)
 	RebaseSha = strings.Repeat("d", 40)
 	DeadSha   = strings.Repeat("e", 40)
+	PrSha     = strings.Repeat("f", 40)
 )
 
 func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
@@ -54,6 +56,11 @@ type World struct {
 	prs     []*gh.PullRequest
 	reviews []*gh.PullRequestReview
 	runs    []*gh.WorkflowRun
+
+	// prCommits serves /pulls/{n}/commits — the PR's own branch commits,
+	// which the default-branch walk never sees. Absent numbers answer the
+	// empty list, like the real API for a PR with no commits left.
+	prCommits map[int][]*gh.RepositoryCommit
 
 	// prDetails serves /pulls/{n} as the wire body: the real endpoint's
 	// response carries merge_method/requested_reviewers, which the list
@@ -187,6 +194,24 @@ func NewWorld(t *testing.T) *World {
 				HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1002"),
 				SubmittedAt: tst(t0.Add(30*time.Hour + 45*time.Minute)),
 			},
+		},
+		// PR#3's branch commit: only the PR's commit list carries it (the
+		// default-branch walk never sees PrSha). Same author as ShaA — the
+		// sync must resolve to the one ann, not a second engineer.
+		prCommits: map[int][]*gh.RepositoryCommit{
+			3: {{
+				SHA:     strptr(PrSha),
+				HTMLURL: strptr("https://github.com/acme/widgets/commit/" + PrSha),
+				Author:  &gh.User{Login: strptr("ann")},
+				Commit: &gh.Commit{
+					Message: strptr("fix the wobbles"),
+					Author: &gh.CommitAuthor{
+						Name:  strptr("Ann Coder"),
+						Email: strptr("1234567+ann@users.noreply.github.com"),
+						Date:  tst(t0.Add(29 * time.Hour)),
+					},
+				},
+			}},
 		},
 		// The single-PR GET for #3: the richer record (labels/draft/merge
 		// method/requested reviewers) in wire form — a raw map, since the
@@ -516,6 +541,17 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, w.repos)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/pulls/") && strings.HasSuffix(r.URL.Path, "/commits"):
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/acme/widgets/pulls/"), "/commits"))
+		if err != nil {
+			http.NotFound(rw, r)
+			return
+		}
+		if cs, ok := w.prCommits[n]; ok {
+			encode(rw, cs)
+			return
+		}
+		encode(rw, []*gh.RepositoryCommit{})
 	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/commits"):
 		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/acme/"), "/commits")
 		if w.emptyRepos[name] {

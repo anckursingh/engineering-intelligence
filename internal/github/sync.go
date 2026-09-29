@@ -319,31 +319,8 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 			ck.Github.Repos[key] = newHead
 		}
 		for _, c := range batch {
-			commitOnt := toCommit(c, owner, repo)
-			ko, err := commitOnt.KnowledgeObject(ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
-			if err != nil {
+			if _, err := s.syncCommit(c, owner, repo); err != nil {
 				return err
-			}
-			commitKoid, err := s.upsert(ko)
-			if err != nil {
-				return err
-			}
-			s.shaToCommit[commitOnt.SHA] = commitKoid
-
-			comm := c.GetCommit()
-			name, email := "", ""
-			if comm != nil {
-				name, email = comm.GetAuthor().GetName(), comm.GetAuthor().GetEmail()
-			}
-			p := identity.Resolve(name, email, c.GetAuthor().GetLogin())
-			engKoid, err := s.engineer(p, ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
-			if err != nil {
-				return err
-			}
-			if engKoid != "" {
-				if err := s.relate(engKoid, commitKoid, ontology.RelAuthored); err != nil {
-					return err
-				}
 			}
 		}
 		if resp.NextPage == 0 {
@@ -352,6 +329,39 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 		page = resp.NextPage
 	}
 	return nil
+}
+
+// syncCommit upserts one repository commit, records its koid for merge
+// lookup, and relates its author. Shared by the default-branch walk and the
+// per-PR commit lists.
+func (s *syncer) syncCommit(c *gh.RepositoryCommit, owner, repo string) (string, error) {
+	commitOnt := toCommit(c, owner, repo)
+	ko, err := commitOnt.KnowledgeObject(ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
+	if err != nil {
+		return "", err
+	}
+	commitKoid, err := s.upsert(ko)
+	if err != nil {
+		return "", err
+	}
+	s.shaToCommit[commitOnt.SHA] = commitKoid
+
+	comm := c.GetCommit()
+	name, email := "", ""
+	if comm != nil {
+		name, email = comm.GetAuthor().GetName(), comm.GetAuthor().GetEmail()
+	}
+	p := identity.Resolve(name, email, c.GetAuthor().GetLogin())
+	engKoid, err := s.engineer(p, ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
+	if err != nil {
+		return "", err
+	}
+	if engKoid != "" {
+		if err := s.relate(engKoid, commitKoid, ontology.RelAuthored); err != nil {
+			return "", err
+		}
+	}
+	return commitKoid, nil
 }
 
 func (s *syncer) syncIssues(owner, repo string, watermark time.Time) error {
@@ -468,6 +478,9 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 			}
 		}
 
+		if err := s.syncPRCommits(owner, repo, prKoid, prOnt.Number); err != nil {
+			return err
+		}
 		if err := s.syncPRIssues(owner, repo, prKoid, prOnt); err != nil {
 			return err
 		}
@@ -482,6 +495,29 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// syncPRCommits links a PR's commits with PART_OF (Commit → PullRequest):
+// PR-branch commits never reach the default-branch walk, so the PR's own
+// commit list ingests them (reusing syncCommit — upsert, merge lookup,
+// author edge) and links each to the PR.
+func (s *syncer) syncPRCommits(owner, repo, prKoid string, prNumber int) error {
+	commits, err := paginate(s.ctx, s.client, "pulls.commits", func(page int) ([]*gh.RepositoryCommit, *gh.Response, error) {
+		return s.client.gh.PullRequests.ListCommits(s.ctx, owner, repo, prNumber, &gh.ListOptions{PerPage: 100, Page: page})
+	})
+	if err != nil {
+		return err
+	}
+	for _, c := range commits {
+		commitKoid, err := s.syncCommit(c, owner, repo)
+		if err != nil {
+			return err
+		}
+		if err := s.relate(commitKoid, prKoid, ontology.RelPartOf); err != nil {
+			return err
 		}
 	}
 	return nil
