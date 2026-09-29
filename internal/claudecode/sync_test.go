@@ -288,8 +288,8 @@ func TestSyncWritesTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if res.Sessions != 1 || res.Relationships != 2 || res.Unlinked != 0 {
-		t.Errorf("result = %+v, want 1 session, 2 edges, 0 unlinked", res)
+	if res.Sessions != 1 || res.Relationships != 4 || res.Unlinked != 0 {
+		t.Errorf("result = %+v, want 1 session, 4 edges (2 AI_CONTRIBUTES + 2 AUTHORED), 0 unlinked", res)
 	}
 	wantCounts := map[string]int{
 		"CodingSession": 1, "Interaction": 1, "AgentRun": 3, "AgentTask": 3, "CodeContribution": 2,
@@ -340,6 +340,54 @@ func TestSyncUnlinkedContribution(t *testing.T) {
 	}
 	if res.Counts["CodeContribution"].New != 2 {
 		t.Errorf("contributions = %+v, want 2 stored even when unlinked", res.Counts["CodeContribution"])
+	}
+}
+
+// TestSyncAgentTaskLinks: the task whose tool_use produced a code edit links
+// AUTHORED to its contribution — the Milestone D graph AgentTask →
+// CodeContribution → PR reconstructs from telemetry alone (a non-code task
+// produces nothing).
+func TestSyncAgentTaskLinks(t *testing.T) {
+	store := knowledge.NewMemory()
+	seedPR(t, store)
+	dir := writeTranscript(t, "s1.jsonl", fixtureTranscript())
+	if _, err := Sync(context.Background(), syncCfg(dir, store)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	task1, err := store.GetByExternalID(context.Background(), "ei.com:agent-task:claude-code:toolu_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), task1.Koid, string(ontology.RelAuthored), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatalf("traverse: %v", err)
+	}
+	if len(got) != 1 || got[0].ExternalID != "ei.com:ai-contribution:claude-code:s1:toolu_1" {
+		t.Errorf("task1 AUTHORED = %v, want exactly its contribution", got)
+	}
+
+	// The full Milestone D chain: the contribution reaches its PR.
+	contrib, err := store.GetByExternalID(context.Background(), "ei.com:ai-contribution:claude-code:s1:toolu_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Traverse(context.Background(), contrib.Koid, string(ontology.RelAIContributes), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatalf("traverse: %v", err)
+	}
+	if len(got) != 1 || got[0].ExternalID != prExt {
+		t.Errorf("contribution AI_CONTRIBUTES = %v, want the PR", got)
+	}
+
+	// toolu_2 (Bash) created no code: no AUTHORED outbound.
+	task2, err := store.GetByExternalID(context.Background(), "ei.com:agent-task:claude-code:toolu_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Traverse(context.Background(), task2.Koid, string(ontology.RelAuthored), knowledge.Outbound, 1)
+	if err != nil || len(got) != 0 {
+		t.Errorf("task2 AUTHORED = %v, %v, want none", got, err)
 	}
 }
 

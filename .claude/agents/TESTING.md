@@ -201,6 +201,15 @@ Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontolo
 - `TestToDeployment` pins the mapping (incl. toService); `TestSyncDeployments` pins the two-edge graph (dep300 → build 200 over PRODUCED, → production over AFFECTS), the no-build-sha silence (dep301 at DeadSha leaves no PRODUCED edge), and the run-2 leg: dep302 at ShaB links through the store to build 200 (watermark-skipped in run 2), zero extra API calls. The Milestone C exit graph Build → Deployment → Service reconstructs.
 - Board and GET /metrics stay unchanged (7 definitions).
 
+## AgentTask → CodeContribution link (item 42, post-contract — roadmap Milestone D)
+
+Suite: `internal/claudecode` (`sync_test.go`), `internal/ontology` (`rels.go`).
+
+- The claudecode connector now links each code-editing task to the contribution its tool_use produced — AUTHORED, whose doc covers both Engineer → Commit|PR and AgentTask → CodeContribution (1:1; a non-code task produces nothing). The join needs no new parsing: the contribution's id embeds the producing task's tool_use id (sessionID:tool_use — both carry no colons).
+- The task link does not depend on the PR link: an unlinked contribution (PR absent from the store) still keeps its AUTHORED edge.
+- `TestSyncAgentTaskLinks` — toolu_1's outbound AUTHORED reaches exactly its contribution, which reaches the seeded PR (the AgentTask → CodeContribution → PR chain); toolu_2 (Bash, no code) has no AUTHORED outbound. TestSyncWritesTelemetry's relationships pin grew 2 → 4.
+- Milestone D's exit graph AgentTask → CodeContribution → PR → Build reconstructs: the task leg here, PR → Build by TestSyncCI (HAS_BUILD). Not built (absent from the transcript or the exit graph): Engineer → Interaction (no human identity in transcripts), Interaction → AgentRun (pairing unrecorded), Agent/Model/AgentOutcome entities (model is an attribute on every object already).
+
 ## Releases (item 41, post-contract — roadmap Milestone C)
 
 Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontology` (`rels.go`).

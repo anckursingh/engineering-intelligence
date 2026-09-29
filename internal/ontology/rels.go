@@ -11,11 +11,15 @@ package ontology
 //	                cardinality: N:1
 //	                test: TestSyncRun1Full (repo reaches org)
 //
-//	AUTHORED        source Engineer → target Commit | PullRequest
-//	                meaning: the engineer wrote it
+//	AUTHORED        source Engineer → target Commit | PullRequest;
+//	                source AgentTask → target CodeContribution
+//	                meaning: the author wrote it — for an AgentTask the
+//	                tool_use record is the telemetry (a non-code task
+//	                produces nothing)
 //	                inverse: authored by (inbound traversal)
-//	                cardinality: N:M
-//	                test: AC-KG-001 + TestSyncRun1Full (commit → author)
+//	                cardinality: 1:N from an engineer; 1:1 from an AgentTask
+//	                test: AC-KG-001 + TestSyncRun1Full (commit → author) +
+//	                TestSyncAgentTaskLinks
 //
 //	IMPLEMENTS      source PullRequest → target Issue
 //	                meaning: the PR body references/closes the issue
@@ -117,7 +121,7 @@ type RelType string
 
 const (
 	RelBelongsTo       RelType = "BELONGS_TO"
-	RelAuthored        RelType = "AUTHORED"
+	RelAuthored        RelType = "AUTHORED" // Engineer → Commit|PR; AgentTask → CodeContribution
 	RelImplements      RelType = "IMPLEMENTS"
 	RelPartOf          RelType = "PART_OF" // Commit → PullRequest; from the PR's commit list
 	RelTargets         RelType = "TARGETS"
