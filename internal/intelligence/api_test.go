@@ -41,8 +41,9 @@ func seedSection(t *testing.T, store knowledge.KnowledgeStore, repoKO knowledge.
 
 // seedInvestigationWorld is the §23 fixture as a knowledge graph: Month A
 // three PRs at 2d cycle with +1d reviews; Month B two PRs at 4d cycle with
-// +2d reviews.
-func seedInvestigationWorld(t *testing.T, store knowledge.KnowledgeStore) {
+// +2d reviews. Returns the repo KO so callers can hang further entities
+// (e.g. builds) under it.
+func seedInvestigationWorld(t *testing.T, store knowledge.KnowledgeStore) knowledge.KnowledgeObject {
 	t.Helper()
 	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
 	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
@@ -51,6 +52,7 @@ func seedInvestigationWorld(t *testing.T, store knowledge.KnowledgeStore) {
 
 	seedSection(t, store, repo, time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC), 2, 1, 3, 1)
 	seedSection(t, store, repo, time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC), 4, 2, 2, 4)
+	return repo
 }
 
 const investigationBody = `{"scope":"github.com:org:acme",` +
@@ -192,5 +194,54 @@ func TestAPIInvestigationLiveAikoql(t *testing.T) {
 	}
 	if got.Statement != wantStatement {
 		t.Errorf("statement = %q\nwant       %q", got.Statement, wantStatement)
+	}
+}
+
+const ciQualityBody = `{"question":"Why did CI quality change?","scope":"github.com:org:acme",` +
+	`"window_a":{"name":"Month A","start":"2026-08-01T00:00:00Z","end":"2026-09-01T00:00:00Z"},` +
+	`"window_b":{"name":"Month B","start":"2026-09-01T00:00:00Z","end":"2026-10-01T00:00:00Z"}}`
+
+// TestInvestigateQuestionDispatch (Milestone F, item 44): POST /investigations
+// runs the engine named by the question — CI quality compares ci_pass_rate as
+// the primary, and the stored result carries the question.
+func TestInvestigateQuestionDispatch(t *testing.T) {
+	store := knowledge.NewMemory()
+	repo := seedInvestigationWorld(t, store)
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	aug := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	for i, c := range []string{"success", "success", "success", "failure"} {
+		bKO := upsert(t, store, mapKO(t, ontology.Build{
+			Repository: "acme/widgets", ID: int64(i + 1), Conclusion: c,
+			CompletedAt: aug.Add(time.Duration(i) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: bKO.Koid})
+	}
+	sep := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	for i, c := range []string{"success", "failure", "failure", "failure"} {
+		bKO := upsert(t, store, mapKO(t, ontology.Build{
+			Repository: "acme/widgets", ID: int64(5 + i), Conclusion: c,
+			CompletedAt: sep.Add(time.Duration(i) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: bKO.Koid})
+	}
+
+	api := NewAPI(store)
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/investigations", strings.NewReader(ciQualityBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got InvestigationResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Question != QuestionCIQuality {
+		t.Errorf("question = %q, want %q", got.Question, QuestionCIQuality)
+	}
+	if got.Primary.Metric != "ci_pass_rate" || got.Primary.Value != 25.0 || got.Primary.Comparison != 75.0 {
+		t.Errorf("primary = %+v, want ci_pass_rate 25.0 vs 75.0", got.Primary)
+	}
+	if !strings.Contains(got.Statement, "CI pass rate decreased from 75.0 to 25.0 %.") {
+		t.Errorf("statement = %q, want the CI pass rate primary", got.Statement)
 	}
 }

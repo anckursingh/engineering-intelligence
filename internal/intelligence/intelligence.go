@@ -1,9 +1,11 @@
 // Package intelligence holds the deterministic investigation engine (§22-23).
-// The first investigation answers "Why did cycle time change?" by comparing
-// two windows over a caller-built Population and listing which other metrics
-// moved alongside it — as candidate contributing factors and associations,
-// never as causes. Statements are generated text ONLY: the reconstruction
-// contract (§20) lives in the evidence lineage and the deterministic engine.
+// MetricChange answers every supported question — "Why did cycle time
+// change?" first, CI quality, AI adoption and review latency per Milestone F
+// — by comparing two windows over a caller-built Population and listing
+// which other metrics moved alongside the primary: as candidate contributing
+// factors and associations, never as causes. Statements are generated text
+// ONLY: the reconstruction contract (§20) lives in the evidence lineage and
+// the deterministic engine.
 package intelligence
 
 import (
@@ -15,8 +17,24 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/metrics"
 )
 
-// QuestionCycleTime is the first supported question (§22).
-const QuestionCycleTime = "Why did cycle time change?"
+// Supported questions (§22, Milestone F): one per metric family, each
+// mapping to a primary metric through questionPrimary. The agent's refusal
+// lists exactly these.
+const (
+	QuestionCycleTime     = "Why did cycle time change?"
+	QuestionCIQuality     = "Why did CI quality change?"
+	QuestionAIAdoption    = "What changed after AI adoption increased?"
+	QuestionReviewLatency = "What is associated with increased review latency?"
+)
+
+// questionPrimary names each supported question's primary metric — the
+// metric the question asks about; everything else is a candidate factor.
+var questionPrimary = map[string]string{
+	QuestionCycleTime:     "cycle_time",
+	QuestionCIQuality:     "ci_pass_rate",
+	QuestionAIAdoption:    "ai_assisted_pr_pct",
+	QuestionReviewLatency: "review_latency",
+}
 
 // Window is a named comparison window (§22).
 type Window struct {
@@ -80,19 +98,30 @@ var limitations = func() []string {
 	)
 }()
 
-// CycleTimeChange compares cycle time between two windows and reports which
-// other metrics moved alongside it (§22-23). Uncomputable factors are
-// reported honestly (appeared/disappeared) or skipped (unchanged) — never
-// fabricated, never causal.
-func CycleTimeChange(pop metrics.Population, a, b Window) Investigation {
-	primary := candidates[0]
+// MetricChange compares one primary metric between two windows and reports
+// which other metrics moved alongside it (§22-23, Milestone F): the engine
+// behind every supported question. Uncomputable factors are reported
+// honestly (appeared/disappeared) or skipped (unchanged) — never fabricated,
+// never causal, and the primary never doubles as its own factor.
+func MetricChange(pop metrics.Population, a, b Window, primaryName, question string) Investigation {
+	var primary candidate
+	found := false
+	for _, c := range candidates {
+		if c.name == primaryName {
+			primary, found = c, true
+			break
+		}
+	}
+	if !found {
+		return concluded(question, fmt.Sprintf("Unknown metric %s.", primaryName))
+	}
 	from, okA, evA := summarize(primary.compute(pop, a.Range))
 	to, okB, evB := summarize(primary.compute(pop, b.Range))
 	if !okA || !okB {
-		return concluded(fmt.Sprintf("Not enough cycle_time data in %s to investigate.", firstMissing(a, b, okA, okB)))
+		return concluded(question, fmt.Sprintf("Not enough %s data in %s to investigate.", primaryName, firstMissing(a, b, okA, okB)))
 	}
 	if from == to {
-		res := concluded(fmt.Sprintf("Cycle time did not change (%.1f days).", from))
+		res := concluded(question, fmt.Sprintf("%s did not change (%.1f %s).", primary.label, from, primary.unit))
 		res.Primary = buildFinding(primary, from, to, evA, evB)
 		return res
 	}
@@ -101,7 +130,10 @@ func CycleTimeChange(pop metrics.Population, a, b Window) Investigation {
 	var bld strings.Builder
 	fmt.Fprintf(&bld, "%s %s from %.1f to %.1f %s.", p.Label, direction(from, to), p.From, p.To, p.Unit)
 	var factors []Finding
-	for _, c := range candidates[1:] {
+	for _, c := range candidates {
+		if c.name == primaryName {
+			continue
+		}
 		fA, okA, evA := summarize(c.compute(pop, a.Range))
 		fB, okB, evB := summarize(c.compute(pop, b.Range))
 		f, sentence, listed := factorFinding(c, fA, okA, fB, okB, evA, evB, b.Name)
@@ -114,10 +146,16 @@ func CycleTimeChange(pop metrics.Population, a, b Window) Investigation {
 	}
 	bld.WriteString(" The data supports an association, but does not establish causality.")
 
-	res := concluded(bld.String())
+	res := concluded(question, bld.String())
 	res.Primary = p
 	res.Factors = factors
 	return res
+}
+
+// CycleTimeChange is the §23 entry point: the cycle-time question through
+// the shared engine.
+func CycleTimeChange(pop metrics.Population, a, b Window) Investigation {
+	return MetricChange(pop, a, b, "cycle_time", QuestionCycleTime)
 }
 
 // summarize is the window aggregation: mean of the per-entity observation
@@ -179,9 +217,9 @@ func firstMissing(a, b Window, okA, okB bool) string {
 
 // concluded stamps the shared conclusion contract: calculated state, full
 // arithmetic confidence, all limitations.
-func concluded(statement string) Investigation {
+func concluded(question, statement string) Investigation {
 	return Investigation{
-		Question:    QuestionCycleTime,
+		Question:    question,
 		Statement:   statement,
 		State:       evidence.StateCalculated,
 		Confidence:  1.0,

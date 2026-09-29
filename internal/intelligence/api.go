@@ -156,7 +156,14 @@ func (a *API) handleInvestigate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "scope required")
 		return
 	}
-	if req.Question != "" && req.Question != QuestionCycleTime {
+	// An omitted question keeps the §23 default; an unknown one is a 400 —
+	// the caller named a question the engine cannot answer.
+	question := req.Question
+	if question == "" {
+		question = QuestionCycleTime
+	}
+	primary, ok := questionPrimary[question]
+	if !ok {
 		writeErr(w, http.StatusBadRequest, "unsupported question")
 		return
 	}
@@ -175,7 +182,7 @@ func (a *API) handleInvestigate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	inv := CycleTimeChange(pop, wa, wb)
+	inv := MetricChange(pop, wa, wb, primary, question)
 	writeJSON(w, http.StatusOK, a.record(inv, wb.Name))
 }
 

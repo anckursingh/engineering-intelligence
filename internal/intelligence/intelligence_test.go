@@ -238,6 +238,92 @@ func TestCycleTimeChangeAIFactor(t *testing.T) {
 	}
 }
 
+// ciBuild builds one verdict Build entity completed at the given time.
+func ciBuild(extID string, num int, conclusion string, completed time.Time) metrics.Entity[ontology.Build] {
+	return metrics.Entity[ontology.Build]{
+		ExternalID: extID,
+		Value: ontology.Build{
+			Repository: "acme/widgets", ID: int64(num),
+			Conclusion: conclusion, CompletedAt: completed,
+		},
+	}
+}
+
+// TestMetricChangeCIQuality (Milestone F, item 44): any supported question
+// runs the shared two-window engine with its own primary — here CI quality,
+// 75% pass in Month A falling to 25% in Month B — and the primary never
+// doubles as one of its own factors.
+func TestMetricChangeCIQuality(t *testing.T) {
+	popA, a := monthA()
+	popB, b := monthB()
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	pop := metrics.Population{
+		PullRequests: append(append([]metrics.Entity[ontology.PullRequest]{}, popA.PullRequests...), popB.PullRequests...),
+		Reviews:      append(append([]metrics.Entity[ontology.Review]{}, popA.Reviews...), popB.Reviews...),
+		Builds: []metrics.Entity[ontology.Build]{
+			// Month A: 3 pass, 1 fail → 75%.
+			ciBuild("github.com:build:acme/widgets:1", 1, "success", base.Add(2*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:2", 2, "success", base.Add(4*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:3", 3, "success", base.Add(6*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:4", 4, "failure", base.Add(8*24*time.Hour)),
+			// Month B: 1 pass, 3 fail → 25%.
+			ciBuild("github.com:build:acme/widgets:5", 5, "success", base.Add(33*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:6", 6, "failure", base.Add(35*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:7", 7, "failure", base.Add(37*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:8", 8, "failure", base.Add(39*24*time.Hour)),
+		},
+	}
+	got := MetricChange(pop, a, b, "ci_pass_rate", QuestionCIQuality)
+
+	want := "CI pass rate decreased from 75.0 to 25.0 %. " +
+		"Cycle time increased by 100.0%. " +
+		"Review latency increased by 100.0%. " +
+		"Throughput decreased by 33.3%. " +
+		"The data supports an association, but does not establish causality."
+	if got.Statement != want {
+		t.Errorf("statement = %q\nwant       %q", got.Statement, want)
+	}
+	if got.Question != QuestionCIQuality {
+		t.Errorf("question = %q, want %q", got.Question, QuestionCIQuality)
+	}
+	if got.Primary.Metric != "ci_pass_rate" || got.Primary.From != 75.0 || got.Primary.To != 25.0 {
+		t.Errorf("primary = %+v, want ci_pass_rate 75.0→25.0", got.Primary)
+	}
+	if len(got.Factors) != 3 {
+		t.Fatalf("factors = %d, want 3 (cycle_time, review_latency, throughput)", len(got.Factors))
+	}
+	for _, f := range got.Factors {
+		if f.Metric == "ci_pass_rate" {
+			t.Errorf("primary listed as its own factor: %+v", f)
+		}
+	}
+}
+
+// TestMetricChangeMissingData (Milestone F): the honest missing-data
+// statement names the primary metric and the first window lacking data.
+func TestMetricChangeMissingData(t *testing.T) {
+	popA, a := monthA()
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	pop := metrics.Population{
+		PullRequests: popA.PullRequests,
+		Reviews:      popA.Reviews,
+		Builds: []metrics.Entity[ontology.Build]{
+			ciBuild("github.com:build:acme/widgets:1", 1, "success", base.Add(2*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:2", 2, "failure", base.Add(4*24*time.Hour)),
+		},
+	}
+	got := MetricChange(pop, a, Window{Name: "Month B", Range: metrics.Window{
+		Start: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+	}}, "ci_pass_rate", QuestionCIQuality)
+	if got.Statement != "Not enough ci_pass_rate data in Month B to investigate." {
+		t.Errorf("statement = %q", got.Statement)
+	}
+	if got.Question != QuestionCIQuality {
+		t.Errorf("question = %q, want %q", got.Question, QuestionCIQuality)
+	}
+}
+
 // TestCycleTimeChangeAIFlatExcluded: an unchanged AI-assisted share (100% in
 // both windows) is not a candidate factor.
 func TestCycleTimeChangeAIFlatExcluded(t *testing.T) {

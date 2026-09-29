@@ -380,3 +380,11 @@ All applicable rows true before "done":
 - **Data**: provenance preserved; temporal semantics defined; identity semantics defined; evidence lineage preserved.
 - **Product**: acceptance criterion mapped; limitations documented; user-visible behavior defined.
 - **Operations**: logs/metrics where needed; checkpoint behavior defined; secrets protected.
+
+## Investigation question dispatch (item 44, post-contract — roadmap Milestone F)
+
+- The engine is `MetricChange(pop, a, b, primaryName, question)` — the shared two-window comparison behind every supported question; `CycleTimeChange` delegates with `"cycle_time"`. The primary candidate is excluded from its own factor loop, missing data says "Not enough <name> data in <window> to investigate." (the first window lacking it), unchanged says "<Label> did not change (...).", and `concluded(question, statement)` stamps the question on every output.
+- Questions (`questionPrimary`): Why did cycle time change? → cycle_time; Why did CI quality change? → ci_pass_rate; What changed after AI adoption increased? → ai_assisted_pr_pct; What is associated with increased review latency? → review_latency.
+- Classification (agent.go): a topic phrase ("cycle time" | "ci quality" | "ai adoption" | "review latency") plus a change word (or why-prefix) routes to the matching engine class; anything else is the honest refusal, which now lists all four supported questions ("I can only answer: ...; ..."). `askChange` is the single ask path (previous/current derived windows → MetricChange).
+- POST /investigations dispatches on the question field (`questionPrimary`); omitted question keeps the §23 default (cycle time), unknown → 400 "unsupported question".
+- Tests: `TestMetricChangeCIQuality` pins the CI statement (75.0 → 25.0 %, factors cycle time + review latency + throughput, primary never a factor) and `TestMetricChangeMissingData` the named-metric honesty; `TestAskCIDispatch` (classification + dispatch + evidence resolution over seedAgentCIWorld); `TestAskClassification` now covers all four classes; `TestInvestigateQuestionDispatch` pins the API's question → primary dispatch. All §23 pins hold unchanged — delegation is behavior-preserving.

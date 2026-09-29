@@ -91,23 +91,34 @@ func TestAskCycleTimeChange(t *testing.T) {
 	}
 }
 
-// TestAskClassification: recognized phrasings route to the engine; anything
+// TestAskClassification: recognized phrasings route to their engine; anything
 // else is an honest refusal with no evidence — never an invented answer.
 func TestAskClassification(t *testing.T) {
 	store := knowledge.NewMemory()
 	seedAgentWorld(t, store)
 
-	for _, v := range []string{"why is my cycle time higher?", "CYCLE TIME SLOWER??", "cycle time changed", "is cycle time worse now?"} {
-		ans, err := Ask(context.Background(), store, agentQuery(v))
+	cases := map[string]string{
+		"why is my cycle time higher?":                      "cycle_time_change",
+		"CYCLE TIME SLOWER??":                               "cycle_time_change",
+		"cycle time changed":                                "cycle_time_change",
+		"is cycle time worse now?":                          "cycle_time_change",
+		"Why did CI quality change?":                        "ci_quality_change",
+		"did CI quality change?":                            "ci_quality_change",
+		"What changed after AI adoption increased?":         "ai_adoption_change",
+		"What is associated with increased review latency?": "review_latency_change",
+		"did review latency change?":                        "review_latency_change",
+	}
+	for text, want := range cases {
+		ans, err := Ask(context.Background(), store, agentQuery(text))
 		if err != nil {
-			t.Fatalf("ask %q: %v", v, err)
+			t.Fatalf("ask %q: %v", text, err)
 		}
-		if ans.Class != "cycle_time_change" {
-			t.Errorf("ask %q classified as %q, want cycle_time_change", v, ans.Class)
+		if ans.Class != want {
+			t.Errorf("ask %q classified as %q, want %s", text, ans.Class, want)
 		}
 	}
 
-	for _, v := range []string{"why is the sky blue?", "how many engineers do we have?", "did review latency change?"} {
+	for _, v := range []string{"why is the sky blue?", "how many engineers do we have?", "did deployments change?"} {
 		ans, err := Ask(context.Background(), store, agentQuery(v))
 		if err != nil {
 			t.Fatalf("ask %q: %v", v, err)
@@ -132,6 +143,101 @@ func TestAskUnknownScope(t *testing.T) {
 	q.Scope = "github.com:org:nope"
 	if _, err := Ask(context.Background(), store, q); err == nil {
 		t.Fatal("unknown scope returned no error")
+	}
+}
+
+// seedAgentCIWorld is seedAgentWorld plus the CI dimension: each Month A PR
+// gets a +1d review, each Month B PR a +2d review, and the repo's builds run
+// 3:1 pass in August and 1:3 pass in September.
+func seedAgentCIWorld(t *testing.T, store knowledge.KnowledgeStore) {
+	t.Helper()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+
+	aug := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		created := aug.Add(time.Duration(i+1) * 24 * time.Hour)
+		prKO := upsert(t, store, mapKO(t, ontology.PullRequest{
+			Repository: "acme/widgets", Number: i + 1, Merged: true,
+			CreatedAt: created, MergedAt: aug.Add(time.Duration(i+3) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: prKO.Koid, To: repo.Koid})
+		revKO := upsert(t, store, mapKO(t, ontology.Review{
+			Repository: "acme/widgets", PRNumber: i + 1, ID: int64(100 + i),
+			SubmittedAt: created.Add(24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsReview), From: prKO.Koid, To: revKO.Koid})
+	}
+	sep := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		created := sep.Add(time.Duration(i+1) * 24 * time.Hour)
+		prKO := upsert(t, store, mapKO(t, ontology.PullRequest{
+			Repository: "acme/widgets", Number: i + 4, Merged: true,
+			CreatedAt: created, MergedAt: sep.Add(time.Duration(i+3) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: prKO.Koid, To: repo.Koid})
+		revKO := upsert(t, store, mapKO(t, ontology.Review{
+			Repository: "acme/widgets", PRNumber: i + 4, ID: int64(104 + i),
+			SubmittedAt: created.Add(2 * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsReview), From: prKO.Koid, To: revKO.Koid})
+	}
+	for i := 0; i < 3; i++ {
+		bKO := upsert(t, store, mapKO(t, ontology.Build{
+			Repository: "acme/widgets", ID: int64(i + 1), Conclusion: "success",
+			CompletedAt: aug.Add(time.Duration(2+i) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: bKO.Koid})
+	}
+	bKO := upsert(t, store, mapKO(t, ontology.Build{
+		Repository: "acme/widgets", ID: 4, Conclusion: "failure",
+		CompletedAt: aug.Add(5 * 24 * time.Hour),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: bKO.Koid})
+	for i := 0; i < 3; i++ {
+		bKO := upsert(t, store, mapKO(t, ontology.Build{
+			Repository: "acme/widgets", ID: int64(5 + i), Conclusion: "failure",
+			CompletedAt: sep.Add(time.Duration(2+i) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: bKO.Koid})
+	}
+	bKO = upsert(t, store, mapKO(t, ontology.Build{
+		Repository: "acme/widgets", ID: 8, Conclusion: "success",
+		CompletedAt: sep.Add(5 * 24 * time.Hour),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: bKO.Koid})
+}
+
+// TestAskCIDispatch (Milestone F, item 44): a CI-quality question classifies
+// to its engine and the answer runs the shared two-window engine with
+// ci_pass_rate as primary — evidence resolves back through the store.
+func TestAskCIDispatch(t *testing.T) {
+	store := knowledge.NewMemory()
+	seedAgentCIWorld(t, store)
+	ans, err := Ask(context.Background(), store, agentQuery("Why did CI quality change?"))
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if ans.Class != "ci_quality_change" {
+		t.Errorf("class = %q, want ci_quality_change", ans.Class)
+	}
+	if !strings.Contains(ans.Statement, "CI pass rate decreased from 75.0 to 25.0 %.") {
+		t.Errorf("statement = %q, want the CI pass rate primary", ans.Statement)
+	}
+	if len(ans.Evidence) == 0 {
+		t.Fatal("no evidence references")
+	}
+	for _, ev := range ans.Evidence {
+		for _, id := range ev.ObjectIDs {
+			if _, err := store.GetByExternalID(context.Background(), id); err != nil {
+				t.Errorf("cited object %s does not exist in the store: %v — fabricated evidence", id, err)
+			}
+		}
+	}
+	if len(ans.Limitations) == 0 {
+		t.Error("limitations missing")
 	}
 }
 
