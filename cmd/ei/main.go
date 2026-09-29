@@ -37,9 +37,15 @@ const usage = `usage:
 
 All commands need AIKOQL_MCP_BIN pointing at the aikoql-mcp server binary
 and --db naming its database directory. GITHUB_TOKEN enables authenticated
-GitHub requests (60 req/hr otherwise).`
+GitHub requests (60 req/hr otherwise); JIRA_EMAIL/JIRA_TOKEN fall back for
+the jira --email/--token flags. Any of these may live in a .env file in the
+working directory (process env always wins).`
 
 func main() {
+	if err := loadDotEnv(".env"); err != nil {
+		fmt.Fprintln(os.Stderr, "ei:", err)
+		os.Exit(1)
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "ei:", err)
 		os.Exit(1)
@@ -160,8 +166,8 @@ func runJira(args []string) error {
 	fs := flag.NewFlagSet("ei sync jira", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(fs.Output(), usage) }
 	baseURL := fs.String("base-url", "", "Jira base URL (e.g. https://acme.atlassian.net)")
-	email := fs.String("email", "", "Jira account email")
-	token := fs.String("token", "", "Jira API token")
+	emailFlag := fs.String("email", "", "Jira account email")
+	tokenFlag := fs.String("token", "", "Jira API token")
 	project := fs.String("project", "", "Jira project key")
 	checkpointPath := fs.String("checkpoint", ".ei/jira-checkpoint.json", "checkpoint file")
 	sinceStr := fs.String("since", "", "backfill override (RFC3339); empty = checkpoint watermark")
@@ -172,7 +178,14 @@ func runJira(args []string) error {
 		}
 		return err
 	}
-	if *baseURL == "" || *email == "" || *token == "" || *project == "" {
+	email, token := *emailFlag, *tokenFlag
+	if email == "" {
+		email = os.Getenv("JIRA_EMAIL")
+	}
+	if token == "" {
+		token = os.Getenv("JIRA_TOKEN")
+	}
+	if *baseURL == "" || email == "" || token == "" || *project == "" {
 		return fmt.Errorf("--base-url, --email, --token and --project are required\n%s", usage)
 	}
 	if *dbDir == "" {
@@ -191,8 +204,8 @@ func runJira(args []string) error {
 	started := time.Now()
 	res, err := jira.Sync(context.Background(), jira.Config{
 		BaseURL:        *baseURL,
-		Email:          *email,
-		Token:          *token,
+		Email:          email,
+		Token:          token,
 		Project:        *project,
 		CheckpointPath: *checkpointPath,
 		Since:          since,

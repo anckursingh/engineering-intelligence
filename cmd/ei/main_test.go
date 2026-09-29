@@ -29,6 +29,8 @@ func TestRunBadCommands(t *testing.T) {
 // would surface a different error and prove the validation order wrong.
 func TestRunRequiredFlagsBeforeStore(t *testing.T) {
 	t.Setenv("AIKOQL_MCP_BIN", "")
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_TOKEN", "")
 	cases := []struct {
 		args []string
 		want string
@@ -86,6 +88,19 @@ func TestRunLogShape(t *testing.T) {
 	}
 	if _, ok := m["errors"]; ok {
 		t.Error("errors key present on a clean run")
+	}
+}
+
+// TestRunJiraEnvCredentials: JIRA_EMAIL/JIRA_TOKEN supply the credentials
+// when the flags are empty — validation must pass and fail only at the store
+// step (AIKOQL_MCP_BIN unset here proves the order).
+func TestRunJiraEnvCredentials(t *testing.T) {
+	t.Setenv("AIKOQL_MCP_BIN", "")
+	t.Setenv("JIRA_EMAIL", "e@acme.com")
+	t.Setenv("JIRA_TOKEN", "tok")
+	err := run([]string{"sync", "jira", "--base-url", "u", "--project", "p", "--db", "x"})
+	if err == nil || !strings.Contains(err.Error(), "AIKOQL_MCP_BIN") {
+		t.Errorf("run with env credentials = %v, want AIKOQL_MCP_BIN error", err)
 	}
 }
 

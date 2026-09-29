@@ -259,6 +259,8 @@ Do not claim scalability until measured. Currently measured: per-op latency only
 - `ei serve --db DIR [--addr :8080]` = `http.ListenAndServe` over `intelligence.NewAPI` (§24/§28/§29 routes); the store lives for the process lifetime.
 - Summaries print each connector's SyncResult counts; re-seen-identical rows are skipped (`Count{}`), honest gaps (unlinked/unattributed/unparsed) always printed when nonzero.
 - Live proof: `TestOpenStoreLive` (upsert + GetByExternalID round trip through the CLI's own opener) + a full `ei ingest claude` smoke against a fresh db (exit 0, counts printed; contribution without a repo .git/config → `unattributed 1`, never fabricated).
+- `.env` in the working directory (gitignored) supplies env vars at startup: stdlib-only `KEY=value` parser, process env never overridden, missing file is no error — pinned by `TestLoadDotEnv` (comments/blanks/quotes/`#`-in-value/preexisting env) and `TestLoadDotEnvMissingFile`.
+- Jira credentials fall back to `JIRA_EMAIL`/`JIRA_TOKEN` when `--email`/`--token` are empty; flags win when given — pinned by `TestRunJiraEnvCredentials` (env creds pass validation, fail only at the store step).
 
 ## Definition of Done per feature (§37)
 
