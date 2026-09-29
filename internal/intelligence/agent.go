@@ -32,13 +32,20 @@ type Query struct {
 }
 
 // Answer is the evidence-referenced answer: the engine's statement plus the
-// objects it was computed from (§29's last step).
+// objects it was computed from (§29's last step). Scope, From/To and
+// EpistemicState are the Milestone F exit contract (item 47): every answer
+// carries its population, time window and epistemic state, not only the
+// claim, evidence and limitations.
 type Answer struct {
-	Question    string              `json:"question"`
-	Class       string              `json:"class"`
-	Statement   string              `json:"statement"`
-	Evidence    []evidence.Evidence `json:"evidence"`
-	Limitations []string            `json:"limitations"`
+	Question       string              `json:"question"`
+	Class          string              `json:"class"`
+	Statement      string              `json:"statement"`
+	Scope          string              `json:"scope"`
+	From           time.Time           `json:"from"`
+	To             time.Time           `json:"to"`
+	EpistemicState string              `json:"epistemic_state"`
+	Evidence       []evidence.Evidence `json:"evidence"`
+	Limitations    []string            `json:"limitations"`
 }
 
 // classQuestions maps engine classes to their supported question; the
@@ -67,6 +74,10 @@ func Ask(ctx context.Context, store knowledge.KnowledgeStore, q Query) (Answer, 
 		Class:    "unsupported",
 		Statement: "I can only answer: " + strings.Join(supportedQuestions, "; ") +
 			" (the comparison window is the period before the one you give).",
+		Scope:          q.Scope,
+		From:           q.From,
+		To:             q.To,
+		EpistemicState: evidence.StateUnknown.String(),
 	}, nil
 }
 
@@ -124,11 +135,15 @@ func askChange(ctx context.Context, store knowledge.KnowledgeStore, q Query, cla
 		ev = append(ev, f.Evidence...)
 	}
 	return Answer{
-		Question:    q.Text,
-		Class:       class,
-		Statement:   inv.Statement,
-		Evidence:    ev,
-		Limitations: inv.Limitations,
+		Question:       q.Text,
+		Class:          class,
+		Statement:      inv.Statement,
+		Scope:          q.Scope,
+		From:           q.From,
+		To:             q.To,
+		EpistemicState: inv.State.String(),
+		Evidence:       ev,
+		Limitations:    inv.Limitations,
 	}, nil
 }
 
@@ -160,11 +175,15 @@ func askTaskFailures(ctx context.Context, store knowledge.KnowledgeStore, q Quer
 		}
 	}
 	return Answer{
-		Question:    q.Text,
-		Class:       "task_failures",
-		Statement:   taskFailuresStatement(rows),
-		Evidence:    ev,
-		Limitations: taskLimitations,
+		Question:       q.Text,
+		Class:          "task_failures",
+		Statement:      taskFailuresStatement(rows),
+		Scope:          q.Scope,
+		From:           q.From,
+		To:             q.To,
+		EpistemicState: evidence.StateObserved.String(), // a raw object report, not a calculation
+		Evidence:       ev,
+		Limitations:    taskLimitations,
 	}, nil
 }
 

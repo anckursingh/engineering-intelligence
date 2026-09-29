@@ -70,6 +70,14 @@ func TestAskCycleTimeChange(t *testing.T) {
 	if ans.Class != "cycle_time_change" {
 		t.Errorf("class = %q, want cycle_time_change", ans.Class)
 	}
+	// Milestone F exit contract (item 47): every answer carries its time
+	// window, population (scope) and epistemic state alongside the claim.
+	if ans.Scope != ontology.OrgExternalID("acme") || ans.EpistemicState != "CALCULATED" {
+		t.Errorf("scope/state = %q/%q, want acme org and CALCULATED", ans.Scope, ans.EpistemicState)
+	}
+	if !ans.From.Equal(agentQuery("").From) || !ans.To.Equal(agentQuery("").To) {
+		t.Errorf("window = %v..%v, want the queried period", ans.From, ans.To)
+	}
 	want := "Cycle time increased from 2.0 to 4.0 days. " +
 		"Throughput decreased by 33.3%. " +
 		"The data supports an association, but does not establish causality."
@@ -133,6 +141,9 @@ func TestAskClassification(t *testing.T) {
 		}
 		if len(ans.Evidence) != 0 {
 			t.Errorf("refusal carries evidence: %v", ans.Evidence)
+		}
+		if ans.EpistemicState != "UNKNOWN" {
+			t.Errorf("refusal epistemic state = %q, want UNKNOWN — nothing was computed", ans.EpistemicState)
 		}
 	}
 }
@@ -274,6 +285,9 @@ func TestAskTaskFailures(t *testing.T) {
 	}
 	if ans.Class != "task_failures" {
 		t.Errorf("class = %q, want task_failures", ans.Class)
+	}
+	if ans.Scope != ontology.OrgExternalID("acme") || ans.EpistemicState != "OBSERVED" {
+		t.Errorf("scope/state = %q/%q, want acme org and OBSERVED (raw object report)", ans.Scope, ans.EpistemicState)
 	}
 	want := "1 agent task failed in the period across 1 session: " +
 		"ei.com:coding-session:claude-code:s1: 1 (ei.com:agent-task:claude-code:toolu_1)."

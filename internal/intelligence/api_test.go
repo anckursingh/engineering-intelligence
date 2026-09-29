@@ -85,6 +85,16 @@ func TestAPIInvestigationEndpoints(t *testing.T) {
 	if got.ID == "" || got.Question != QuestionCycleTime {
 		t.Errorf("id/question = %q/%q", got.ID, got.Question)
 	}
+	// Milestone F exit contract (item 47): the result carries its population
+	// (scope), time windows and epistemic state alongside claim/evidence/
+	// limitations.
+	if got.Scope != "github.com:org:acme" || got.EpistemicState != "CALCULATED" {
+		t.Errorf("scope/state = %q/%q, want acme org and CALCULATED", got.Scope, got.EpistemicState)
+	}
+	if got.WindowA.Name != "Month A" || got.WindowA.Start != "2026-08-01T00:00:00Z" || got.WindowA.End != "2026-09-01T00:00:00Z" ||
+		got.WindowB.Name != "Month B" || got.WindowB.Start != "2026-09-01T00:00:00Z" || got.WindowB.End != "2026-10-01T00:00:00Z" {
+		t.Errorf("windows = %+v / %+v, want the queried Month A/B ranges", got.WindowA, got.WindowB)
+	}
 	// §24's structured shape: metric/window/value/comparison/change/
 	// epistemic_state/evidence.
 	if got.Primary.Metric != "cycle_time" || got.Primary.Window != "Month B" ||
@@ -110,6 +120,9 @@ func TestAPIInvestigationEndpoints(t *testing.T) {
 	}
 	if again.Statement != got.Statement || again.ID != got.ID {
 		t.Errorf("stored investigation did not match")
+	}
+	if again.Scope != got.Scope || again.WindowA != got.WindowA || again.EpistemicState != got.EpistemicState {
+		t.Errorf("stored investigation lost its contract fields: %+v", again)
 	}
 
 	// Unknown id → 404.

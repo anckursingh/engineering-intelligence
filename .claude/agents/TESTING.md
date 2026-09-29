@@ -402,3 +402,17 @@ All applicable rows true before "done":
 - Population change: `metrics.Population.TaskSessions map[string]string` — the task→session pairing the walk records via `collectSessionTasks` (the walk previously dropped it; `collectTelemetry` stays for interactions/runs since only tasks carry a location).
 - Agent: classify "task" + "fail" → `task_failures` (first clause — no change word required); `askTaskFailures` answers over the query's period; evidence = one AgentTask entry per failed task + one CodingSession entry per session, both OBSERVED and store-resolvable; limitations = taskLimitations (session is the finest location; only sessions reachable through a contribution's producing task appear).
 - Tests: `TestTaskFailuresGroupsBySession`, `TestTaskFailuresStatement`, `TestAskTaskFailures`; `TestPopulationCollectsTelemetry` pins the TaskSessions pairing; `TestAskClassification` pins the new class.
+
+## Milestone F exit — five-question acceptance mapping (item 47)
+
+The roadmap's exit is: the system answers all five questions, and every answer carries claim / evidence / time window / population / epistemic state / limitations. The mapping:
+
+| # | Question | Surface | Engine | Primary |
+|---|----------|---------|--------|---------|
+| 1 | Why did cycle time change? | POST /investigations (default question) + POST /ask (`cycle_time_change`) | MetricChange | cycle_time |
+| 2 | Why did CI quality change? | POST /investigations (question field) + POST /ask (`ci_quality_change`) | MetricChange | ci_pass_rate |
+| 3 | What changed after AI adoption increased? | POST /investigations + POST /ask (`ai_adoption_change`) | MetricChange | ai_assisted_pr_pct |
+| 4 | Where are agent tasks failing? | POST /ask (`task_failures`) only — it is a single-window location report, not a comparison, so /investigations (two-window by design) refuses it | TaskFailures | — (rows grouped by session) |
+| 5 | What is associated with increased review latency? | POST /investigations + POST /ask (`review_latency_change`) | MetricChange | review_latency |
+
+Contract fields: claim = statement; evidence = the cited object IDs (store-resolvable); time window = Answer.from/to or InvestigationResult.window_a/window_b (RFC3339); population = scope; epistemic state = top-level field (CALCULATED for comparisons, OBSERVED for the raw task report, UNKNOWN for refusals); limitations = the limitations list. POST /comparisons carries its own contract fields (scope/start/end/per-value state) since item 45. Pinned by: TestAPIInvestigationEndpoints (scope/windows/state + stored-result roundtrip), TestAskCycleTimeChange (CALCULATED + window), TestAskTaskFailures (OBSERVED), TestAskClassification (refusals are UNKNOWN). Milestone F COMPLETE.

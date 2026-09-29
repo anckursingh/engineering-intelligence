@@ -62,14 +62,33 @@ func toComparison(f Finding, windowName string, state evidence.State) Comparison
 	}
 }
 
+// windowDTO is a window as the exit contract carries it: name + RFC3339
+// range.
+type windowDTO struct {
+	Name  string `json:"name"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+func toWindowDTO(w Window) windowDTO {
+	return windowDTO{Name: w.Name, Start: w.Range.Start.Format(time.RFC3339), End: w.Range.End.Format(time.RFC3339)}
+}
+
 // InvestigationResult is the stored and returned shape of an investigation.
+// Scope, WindowA/B and EpistemicState are the Milestone F exit contract
+// (item 47): every answer carries its population, time window and epistemic
+// state alongside claim, evidence and limitations.
 type InvestigationResult struct {
-	ID          string       `json:"id"`
-	Question    string       `json:"question"`
-	Statement   string       `json:"statement"`
-	Primary     Comparison   `json:"primary"`
-	Factors     []Comparison `json:"factors,omitempty"`
-	Limitations []string     `json:"limitations"`
+	ID             string       `json:"id"`
+	Question       string       `json:"question"`
+	Statement      string       `json:"statement"`
+	Scope          string       `json:"scope"`
+	WindowA        windowDTO    `json:"window_a"`
+	WindowB        windowDTO    `json:"window_b"`
+	EpistemicState string       `json:"epistemic_state"`
+	Primary        Comparison   `json:"primary"`
+	Factors        []Comparison `json:"factors,omitempty"`
+	Limitations    []string     `json:"limitations"`
 }
 
 // API serves the §24 endpoints over one store.
@@ -185,7 +204,7 @@ func (a *API) handleInvestigate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inv := MetricChange(pop, wa, wb, primary, question)
-	writeJSON(w, http.StatusOK, a.record(inv, wb.Name))
+	writeJSON(w, http.StatusOK, a.record(inv, req.Scope, wa, wb))
 }
 
 func (a *API) handleGetInvestigation(w http.ResponseWriter, r *http.Request) {
@@ -263,15 +282,19 @@ func (a *API) handleComparisons(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *API) record(inv Investigation, windowB string) InvestigationResult {
+func (a *API) record(inv Investigation, scope string, wa, wb Window) InvestigationResult {
 	res := InvestigationResult{
-		Question:    inv.Question,
-		Statement:   inv.Statement,
-		Primary:     toComparison(inv.Primary, windowB, inv.State),
-		Limitations: inv.Limitations,
+		Question:       inv.Question,
+		Statement:      inv.Statement,
+		Scope:          scope,
+		WindowA:        toWindowDTO(wa),
+		WindowB:        toWindowDTO(wb),
+		EpistemicState: inv.State.String(),
+		Primary:        toComparison(inv.Primary, wb.Name, inv.State),
+		Limitations:    inv.Limitations,
 	}
 	for _, f := range inv.Factors {
-		res.Factors = append(res.Factors, toComparison(f, windowB, inv.State))
+		res.Factors = append(res.Factors, toComparison(f, wb.Name, inv.State))
 	}
 	a.mu.Lock()
 	a.next++
