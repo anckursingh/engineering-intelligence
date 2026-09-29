@@ -181,6 +181,15 @@ Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/metric
 - `ci_pass_rate` (new candidate, so the board's Quality section and GET /metrics both grew): success / verdict runs × 100 where a verdict is success|failure|timed_out — cancelled/skipped runs never tested the code and a conclusion-less run is unclassifiable, so neither counts (`TestCIPassRateExact` — 2 success + 1 failure + 1 timed_out + 1 cancelled → 50.0, the 4 verdict builds cited; `TestCIPassRateExcludesNoVerdict`; `TestCIPassRateAbsence` — empty/out-of-window/only-cancelled → nil, silence is not zero). Anchored at completed_at (§19), CALCULATED with every counted Build in evidence.
 - Board: Quality carries ci_pass_rate when builds exist (`TestBoardQualityWithCI` — 3 success + 1 failure → 75.0 %) and the honest note otherwise; the population walk traverses CONTAINS_BUILD outbound (pinned in `TestPopulationFromScope`).
 
+## Richer PR metadata (item 36, post-contract — roadmap Milestone B)
+
+Suite: `internal/github` (`normalize_test.go`, `sync_test.go`).
+
+- The PR list endpoint leaves `merge_method` and `requested_reviewers` unpopulated, so the sync fetches the single-PR GET per changed PR (watermark-gated — run 2 of `TestSyncRun2Delta` skips PR#3 before the GET, keeping the delta counts pinned) and stores the richer record on PullRequest: labels, draft, merge method, requested-reviewers snapshot. A PR deleted between the list and the GET is skipped, not an error.
+- go-github's `PullRequest` struct has no merge_method field (the REST body carries it; the SDK struct does not), so the GET decodes the raw body as `pullDetail` (embedded `gh.PullRequest` + the field) and `toPullRequestDetail` maps it. The fixture serves the wire shape as a raw map (`prDetails`); absent numbers fall back to the list entry.
+- `TestToPullRequestMapsRicherMetadata` — labels/draft/merge method/requested reviewers all mapped; `TestSyncPRRichMetadata` — PR#3's stored properties carry them (`merge_method: squash`, `draft: false`, `labels: [enhancement]`, `requested_reviewers: [bob]`).
+- Nothing consumes these yet — richer metadata for future investigations; the board and GET /metrics stay unchanged (7 definitions).
+
 ## Dashboard + board caching (item 31, post-contract)
 
 Suite: `internal/intelligence` (`board_ui_test.go`, `cache.go`; Memory store + httptest).

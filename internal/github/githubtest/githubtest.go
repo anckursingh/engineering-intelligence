@@ -55,6 +55,12 @@ type World struct {
 	reviews []*gh.PullRequestReview
 	runs    []*gh.WorkflowRun
 
+	// prDetails serves /pulls/{n} as the wire body: the real endpoint's
+	// response carries merge_method/requested_reviewers, which the list
+	// entries above (and go-github's PullRequest struct) lack. Absent
+	// numbers fall back to the list entry, like the real API's shape.
+	prDetails map[int]map[string]any
+
 	userOwner      bool // /orgs/{owner} 404s; /users/{owner} serves the account
 	failOrgOnce    bool
 	failOrg        bool
@@ -172,6 +178,30 @@ func NewWorld(t *testing.T) *World {
 			HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1001"),
 			SubmittedAt: tst(t0.Add(30*time.Hour + 30*time.Minute)),
 		}},
+		// The single-PR GET for #3: the richer record (labels/draft/merge
+		// method/requested reviewers) in wire form — a raw map, since the
+		// connector decodes it directly.
+		prDetails: map[int]map[string]any{
+			3: {
+				"number":              3,
+				"title":               "Fix wobbles",
+				"body":                "Closes #1",
+				"state":               "closed",
+				"merged":              true,
+				"user":                map[string]any{"login": "ann"},
+				"base":                map[string]any{"ref": "main"},
+				"head":                map[string]any{"ref": "fix/wobbles"},
+				"merge_commit_sha":    ShaB,
+				"labels":              []map[string]any{{"name": "enhancement"}},
+				"draft":               false,
+				"merge_method":        "squash",
+				"requested_reviewers": []map[string]any{{"login": "bob"}},
+				"html_url":            "https://github.com/acme/widgets/pull/3",
+				"created_at":          t0.Add(30 * time.Hour).Format(time.RFC3339),
+				"updated_at":          t0.Add(31 * time.Hour).Format(time.RFC3339),
+				"merged_at":           t0.Add(31 * time.Hour).Format(time.RFC3339),
+			},
+		},
 	}
 	w.server = httptest.NewServer(w)
 	t.Cleanup(w.server.Close)
@@ -510,6 +540,25 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, []*gh.PullRequestReview{})
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/pulls/"):
+		// single-PR GET: the wire detail when the world enriches it, the
+		// list entry otherwise.
+		n, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/repos/acme/widgets/pulls/"))
+		if err != nil {
+			http.NotFound(rw, r)
+			return
+		}
+		if d, ok := w.prDetails[n]; ok {
+			encode(rw, d)
+			return
+		}
+		for _, p := range w.prs {
+			if p.GetNumber() == n {
+				encode(rw, p)
+				return
+			}
+		}
+		http.NotFound(rw, r)
 	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/actions/runs"):
 		if r.URL.Path == "/repos/acme/widgets/actions/runs" {
 			encode(rw, &gh.WorkflowRuns{TotalCount: intptr(len(w.runs)), WorkflowRuns: w.runs})

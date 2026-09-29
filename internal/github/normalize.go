@@ -109,6 +109,14 @@ func toCommit(c *gh.RepositoryCommit, owner, repo string) ontology.Commit {
 
 func toPullRequest(p *gh.PullRequest, owner, repo string) ontology.PullRequest {
 	mergedAt := ts(p.GetMergedAt())
+	labels := make([]string, 0, len(p.Labels))
+	for _, l := range p.Labels {
+		labels = append(labels, l.GetName())
+	}
+	requested := make([]string, 0, len(p.RequestedReviewers))
+	for _, u := range p.RequestedReviewers {
+		requested = append(requested, u.GetLogin())
+	}
 	return ontology.PullRequest{
 		Repository: repoRef(owner, repo),
 		Number:     p.GetNumber(),
@@ -117,17 +125,37 @@ func toPullRequest(p *gh.PullRequest, owner, repo string) ontology.PullRequest {
 		State:      p.GetState(),
 		// The list endpoint leaves `merged` nil; merged_at presence is the
 		// authoritative merge signal (dogfood: merged PRs stored as false).
-		Merged:         p.GetMerged() || !mergedAt.IsZero(),
-		AuthorLogin:    p.GetUser().GetLogin(),
-		BaseRef:        p.GetBase().GetRef(),
-		HeadRef:        p.GetHead().GetRef(),
-		MergeCommitSHA: p.GetMergeCommitSHA(),
-		Additions:      p.GetAdditions(),
-		Deletions:      p.GetDeletions(),
-		CreatedAt:      ts(p.GetCreatedAt()),
-		UpdatedAt:      ts(p.GetUpdatedAt()),
-		MergedAt:       mergedAt,
+		Merged:             p.GetMerged() || !mergedAt.IsZero(),
+		AuthorLogin:        p.GetUser().GetLogin(),
+		BaseRef:            p.GetBase().GetRef(),
+		HeadRef:            p.GetHead().GetRef(),
+		MergeCommitSHA:     p.GetMergeCommitSHA(),
+		Additions:          p.GetAdditions(),
+		Deletions:          p.GetDeletions(),
+		Labels:             labels,
+		Draft:              p.GetDraft(),
+		RequestedReviewers: requested,
+		CreatedAt:          ts(p.GetCreatedAt()),
+		UpdatedAt:          ts(p.GetUpdatedAt()),
+		MergedAt:           mergedAt,
 	}
+}
+
+// pullDetail is the single-PR GET response: go-github's PullRequest drops
+// merge_method (the REST body carries it, the SDK struct does not), so the
+// raw decode keeps it.
+type pullDetail struct {
+	gh.PullRequest
+	MergeMethod string `json:"merge_method"`
+}
+
+// toPullRequestDetail maps the single-PR GET — the richer record: labels,
+// draft, merge method, requested reviewers. The list endpoint leaves
+// merge_method and requested_reviewers unpopulated.
+func toPullRequestDetail(d *pullDetail, owner, repo string) ontology.PullRequest {
+	pr := toPullRequest(&d.PullRequest, owner, repo)
+	pr.MergeMethod = d.MergeMethod
+	return pr
 }
 
 func toReview(r *gh.PullRequestReview, owner, repo string, prNumber int) ontology.Review {

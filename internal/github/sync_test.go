@@ -6,6 +6,7 @@ package github_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -122,6 +123,34 @@ func TestSyncSkipsEmptyRepo(t *testing.T) {
 	}
 	if got := res.Counts["Commit"]; got != (github.Count{New: 2}) {
 		t.Errorf("Commit count = %+v, want 2 (the empty repo contributes none)", got)
+	}
+}
+
+// Roadmap Milestone B: the PR list endpoint leaves merge_method and
+// requested_reviewers unpopulated, so the sync fetches the single-PR GET for
+// each changed PR and stores the richer record — labels, draft, merge
+// method, requested reviewers — alongside the list's fields.
+func TestSyncPRRichMetadata(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pr.Properties["merge_method"]; got != "squash" {
+		t.Errorf("merge_method = %v, want squash (single-PR GET field)", got)
+	}
+	if got := pr.Properties["draft"]; got != false {
+		t.Errorf("draft = %v, want false", got)
+	}
+	if got := pr.Properties["labels"]; !reflect.DeepEqual(got, []any{"enhancement"}) {
+		t.Errorf("labels = %v, want [enhancement]", got)
+	}
+	if got := pr.Properties["requested_reviewers"]; !reflect.DeepEqual(got, []any{"bob"}) {
+		t.Errorf("requested_reviewers = %v, want [bob]", got)
 	}
 }
 

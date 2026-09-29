@@ -11,6 +11,7 @@ func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
 func strptr(s string) *string       { return &s }
 func int64ptr(i int64) *int64       { return &i }
 func intptr(i int) *int             { return &i }
+func boolptr(b bool) *bool          { return &b }
 
 // The PR list endpoint never populates `merged` (nil in every list response);
 // merged_at is the authoritative merge signal there. Dogfood: aikoql#6 closed
@@ -44,6 +45,34 @@ func TestToPullRequestMapsDiffSize(t *testing.T) {
 	}, "anckursingh", "aikoql")
 	if got.Additions != 120 || got.Deletions != 35 {
 		t.Fatalf("diff size = %d+/%d-, want 120+/35-", got.Additions, got.Deletions)
+	}
+}
+
+// The PR list endpoint leaves merge_method and requested_reviewers
+// unpopulated — they come with the single-PR GET, along with labels and
+// draft. toPullRequestDetail maps all four (roadmap Milestone B: richer PR
+// metadata). merge_method needs the raw decode: go-github's PullRequest
+// struct drops it.
+func TestToPullRequestMapsRicherMetadata(t *testing.T) {
+	got := toPullRequestDetail(&pullDetail{
+		PullRequest: gh.PullRequest{
+			Labels:             []*gh.Label{{Name: "enhancement"}, {Name: "bug"}},
+			Draft:              boolptr(true),
+			RequestedReviewers: []*gh.User{{Login: strptr("bob")}, {Login: strptr("ann")}},
+		},
+		MergeMethod: "squash",
+	}, "acme", "widgets")
+	if len(got.Labels) != 2 || got.Labels[0] != "enhancement" || got.Labels[1] != "bug" {
+		t.Fatalf("labels = %v, want [enhancement bug]", got.Labels)
+	}
+	if !got.Draft {
+		t.Fatalf("draft = false, want true")
+	}
+	if got.MergeMethod != "squash" {
+		t.Fatalf("merge method = %q, want squash", got.MergeMethod)
+	}
+	if len(got.RequestedReviewers) != 2 || got.RequestedReviewers[0] != "bob" || got.RequestedReviewers[1] != "ann" {
+		t.Fatalf("requested reviewers = %v, want [bob ann]", got.RequestedReviewers)
 	}
 }
 

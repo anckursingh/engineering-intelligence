@@ -37,6 +37,23 @@ func NewClient(token string, httpClient *http.Client) (*Client, error) {
 
 const maxRetries = 3
 
+// pullDetail fetches the single-PR GET over the raw body path: the SDK's
+// PullRequests.Get parses into gh.PullRequest, which has no merge_method
+// field, so the response must be decoded directly.
+// ponytail: one GET per changed PR; the list stays the iteration surface.
+func (c *Client) pullDetail(ctx context.Context, owner, repo string, num int) (*pullDetail, *gh.Response, error) {
+	req, err := c.gh.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, num), nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("github: build pull detail request: %w", err)
+	}
+	d := new(pullDetail)
+	resp, err := c.gh.Do(req, d)
+	if err != nil {
+		return nil, resp, err
+	}
+	return d, resp, nil
+}
+
 // isNotFound reports a GitHub 404 — a definitive miss, not a retryable
 // failure (retry returns 4xx immediately).
 func isNotFound(err error) bool {

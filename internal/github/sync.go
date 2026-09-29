@@ -407,15 +407,29 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 		return err
 	}
 	for _, p := range prs {
-		prOnt := toPullRequest(p, owner, repo)
-		if !watermark.IsZero() && prOnt.UpdatedAt.Before(watermark) {
+		if !watermark.IsZero() && ts(p.GetUpdatedAt()).Before(watermark) {
 			c := s.counts["PullRequest"]
 			c.Skipped++
 			s.counts["PullRequest"] = c
 			continue
 		}
 
-		ko, err := prOnt.KnowledgeObject(ontology.NewProvenance(p.GetHTMLURL(), prOnt.UpdatedAt))
+		// The list leaves merge_method and requested_reviewers unpopulated;
+		// the single-PR GET carries them — the richer record. One GET per
+		// changed PR, gated by the watermark above. A PR deleted between the
+		// list and the GET is skipped, not an error.
+		detail, _, err := retry(s.ctx, s.client, "pulls.get", func() (*pullDetail, *gh.Response, error) {
+			return s.client.pullDetail(s.ctx, owner, repo, p.GetNumber())
+		})
+		if err != nil {
+			if isNotFound(err) {
+				continue
+			}
+			return err
+		}
+		prOnt := toPullRequestDetail(detail, owner, repo)
+
+		ko, err := prOnt.KnowledgeObject(ontology.NewProvenance(detail.GetHTMLURL(), prOnt.UpdatedAt))
 		if err != nil {
 			return err
 		}

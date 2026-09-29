@@ -73,21 +73,25 @@ type Commit struct {
 }
 
 type PullRequest struct {
-	Repository     string    `json:"repository"`
-	Number         int       `json:"number"`
-	Title          string    `json:"title"`
-	Body           string    `json:"body,omitempty"`
-	State          string    `json:"state"`
-	Merged         bool      `json:"merged"`
-	AuthorLogin    string    `json:"author_login,omitempty"`
-	BaseRef        string    `json:"base_ref"`
-	HeadRef        string    `json:"head_ref"`
-	MergeCommitSHA string    `json:"merge_commit_sha,omitempty"`
-	Additions      int       `json:"additions,omitempty"`
-	Deletions      int       `json:"deletions,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	MergedAt       time.Time `json:"merged_at,omitempty"`
+	Repository         string    `json:"repository"`
+	Number             int       `json:"number"`
+	Title              string    `json:"title"`
+	Body               string    `json:"body,omitempty"`
+	State              string    `json:"state"`
+	Merged             bool      `json:"merged"`
+	AuthorLogin        string    `json:"author_login,omitempty"`
+	BaseRef            string    `json:"base_ref"`
+	HeadRef            string    `json:"head_ref"`
+	MergeCommitSHA     string    `json:"merge_commit_sha,omitempty"`
+	Additions          int       `json:"additions,omitempty"`
+	Deletions          int       `json:"deletions,omitempty"`
+	Labels             []string  `json:"labels,omitempty"`
+	Draft              bool      `json:"draft"`
+	MergeMethod        string    `json:"merge_method,omitempty"`        // merge|squash|rebase; single-PR GET only
+	RequestedReviewers []string  `json:"requested_reviewers,omitempty"` // current request snapshot, not history
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	MergedAt           time.Time `json:"merged_at,omitempty"`
 }
 
 type Review struct {
