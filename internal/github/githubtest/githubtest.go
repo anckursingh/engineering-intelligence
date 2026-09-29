@@ -62,6 +62,11 @@ type World struct {
 	// empty list, like the real API for a PR with no commits left.
 	prCommits map[int][]*gh.RepositoryCommit
 
+	// prCloses serves /graphql's closingIssuesReferences per PR — the
+	// authoritative issue links, which also cover links the body keywords
+	// miss (timeline events, manual edits). Absent numbers close nothing.
+	prCloses map[int][]int
+
 	// prDetails serves /pulls/{n} as the wire body: the real endpoint's
 	// response carries merge_method/requested_reviewers, which the list
 	// entries above (and go-github's PullRequest struct) lack. Absent
@@ -213,6 +218,7 @@ func NewWorld(t *testing.T) *World {
 				},
 			}},
 		},
+		prCloses: map[int][]int{3: {1}},
 		// The single-PR GET for #3: the richer record (labels/draft/merge
 		// method/requested reviewers) in wire form — a raw map, since the
 		// connector decodes it directly.
@@ -375,12 +381,14 @@ func (w *World) AddMergeVariants() {
 }
 
 // AddLinkVariants appends the §13.4 linking PRs: #7 references one issue
-// twice, #8 references an issue that does not exist.
+// twice (authoritative data repeats the node), #8 references an issue that
+// does not exist, #9's body carries no close keyword but GitHub links it
+// anyway (timeline event — the case the body regex could never see).
 func (w *World) AddLinkVariants() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	t0 := time.Now().UTC().Add(-5 * 24 * time.Hour)
-	for i, body := range []string{"Closes #2, fixes #2", "Closes #99"} {
+	for i, body := range []string{"Closes #2, fixes #2", "Closes #99", "No linked issue here"} {
 		w.prs = append(w.prs, &gh.PullRequest{
 			Number:    intptr(7 + i),
 			Title:     strptr("Link variant"),
@@ -394,6 +402,12 @@ func (w *World) AddLinkVariants() {
 			UpdatedAt: tst(t0.Add(3 * time.Hour)),
 		})
 	}
+	if w.prCloses == nil {
+		w.prCloses = map[int][]int{}
+	}
+	w.prCloses[7] = []int{2, 2}
+	w.prCloses[8] = []int{99}
+	w.prCloses[9] = []int{1}
 }
 
 // AddBuilds appends the CI fixture: one passed PR-linked run, one failed run,
@@ -508,6 +522,31 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	switch {
+	case r.URL.Path == "/graphql":
+		// closingIssuesReferences: answer from the request's variables —
+		// the authoritative issue links for the named PR.
+		var req struct {
+			Variables struct {
+				Number int `json:"number"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(rw, "bad graphql body", http.StatusBadRequest)
+			return
+		}
+		nodes := []map[string]any{}
+		for _, n := range w.prCloses[req.Variables.Number] {
+			nodes = append(nodes, map[string]any{"number": n})
+		}
+		encode(rw, map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"closingIssuesReferences": map[string]any{"nodes": nodes},
+					},
+				},
+			},
+		})
 	case r.URL.Path == "/orgs/acme":
 		w.orgCalls++
 		if w.userOwner {

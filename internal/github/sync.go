@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -48,11 +46,6 @@ type SyncResult struct {
 	Relationships int
 	Checkpoint    *checkpoint.Checkpoint
 }
-
-// closeRefRe matches GitHub close keywords in PR bodies.
-// ponytail: body-only regex misses timeline-linked issues; upgrade path is
-// GraphQL ClosingIssuesReferences.
-var closeRefRe = regexp.MustCompile(`(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b`)
 
 type syncer struct {
 	ctx      context.Context
@@ -523,25 +516,28 @@ func (s *syncer) syncPRCommits(owner, repo, prKoid string, prNumber int) error {
 	return nil
 }
 
-// syncPRIssues links a PR to the issues its body references, fetching
-// referenced issues on demand (deduped per run) when the incremental
-// window excluded them.
+// syncPRIssues links a PR to the issues it closes, using GitHub's
+// authoritative closingIssuesReferences (GraphQL — the body keywords were
+// only a subset). Issues outside the incremental window are fetched on
+// demand, deduped per run; a closing reference to an issue that no longer
+// exists (deleted or private) is not an error — the reference just yields
+// no edge.
 func (s *syncer) syncPRIssues(owner, repo, prKoid string, pr ontology.PullRequest) error {
-	matches := closeRefRe.FindAllStringSubmatch(pr.Body, -1)
+	nums, _, err := retry(s.ctx, s.client, "graphql.closing-issues", func() ([]int, *gh.Response, error) {
+		return s.client.closingIssues(s.ctx, owner, repo, pr.Number)
+	})
+	if err != nil {
+		return err
+	}
 	seen := map[int]bool{}
-	for _, m := range matches {
-		num, err := strconv.Atoi(m[1])
-		if err != nil || seen[num] {
+	for _, num := range nums {
+		if seen[num] {
 			continue
 		}
 		seen[num] = true
 
 		koid, ok := s.issueKoids[num]
 		if !ok {
-			// Body regex is the fallback path (§13.4); authoritative linking
-			// data joins with GraphQL ClosingIssuesReferences when metrics
-			// need it. A referenced issue that no longer exists (deleted or
-			// private) is not an error — the reference just yields no edge.
 			i, _, err := retry(s.ctx, s.client, "issues.get", func() (*gh.Issue, *gh.Response, error) {
 				return s.client.gh.Issues.Get(s.ctx, owner, repo, num)
 			})

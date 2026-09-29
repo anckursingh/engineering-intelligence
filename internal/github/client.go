@@ -61,6 +61,67 @@ func isNotFound(err error) bool {
 	return errors.As(err, &gerr) && gerr.Response != nil && gerr.Response.StatusCode == http.StatusNotFound
 }
 
+// closingIssuesQuery asks for a PR's authoritative issue links: GitHub
+// resolves them from timeline events, keywords and manual edits — the body
+// regex only ever saw the keyword subset. ponytail: first: 10 — a PR that
+// closes more is a rare outlier; paginate the connection if one shows up.
+const closingIssuesQuery = `
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      closingIssuesReferences(first: 10) {
+        nodes { number }
+      }
+    }
+  }
+}`
+
+// prClosingIssues is the closingIssuesReferences slice of the GraphQL
+// response envelope; a GraphQL-level error (auth scope, malformed query)
+// surfaces as a non-empty Errors — links must never be silently dropped.
+type prClosingIssues struct {
+	Data struct {
+		Repository struct {
+			PullRequest struct {
+				ClosingIssuesReferences struct {
+					Nodes []struct {
+						Number int `json:"number"`
+					} `json:"nodes"`
+				} `json:"closingIssuesReferences"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// closingIssues fetches the PR's authoritative closing-issue numbers over
+// go-github's raw request path (v92 has no GraphQL method; the REST client
+// POSTs api.github.com/graphql fine).
+func (c *Client) closingIssues(ctx context.Context, owner, repo string, num int) ([]int, *gh.Response, error) {
+	req, err := c.gh.NewRequest(ctx, http.MethodPost, "graphql", map[string]any{
+		"query":     closingIssuesQuery,
+		"variables": map[string]any{"owner": owner, "repo": repo, "number": num},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("github: build closing-issues query: %w", err)
+	}
+	out := new(prClosingIssues)
+	resp, err := c.gh.Do(req, out)
+	if err != nil {
+		return nil, resp, err
+	}
+	if len(out.Errors) > 0 {
+		return nil, resp, fmt.Errorf("github: closing-issues query: %s", out.Errors[0].Message)
+	}
+	var nums []int
+	for _, n := range out.Data.Repository.PullRequest.ClosingIssuesReferences.Nodes {
+		nums = append(nums, n.Number)
+	}
+	return nums, resp, nil
+}
+
 // retry runs fn, retrying rate-limit errors (until the reset window) and
 // 5xx (1s/2s/4s backoff). 4xx errors return immediately. Honors ctx.
 func retry[T any](ctx context.Context, c *Client, name string, fn func() (T, *gh.Response, error)) (T, *gh.Response, error) {

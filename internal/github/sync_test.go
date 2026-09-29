@@ -396,10 +396,10 @@ func TestMergeCommitModel(t *testing.T) {
 	}
 }
 
-// §13.4: PR-body regex is the fallback linking path — duplicate references
-// collapse to one edge, and a reference to a nonexistent issue skips the
-// link without failing the run. (Authoritative linking data — GitHub
-// GraphQL ClosingIssuesReferences — joins when metrics need it.)
+// §13.4: issue links come from GitHub's authoritative data (GraphQL
+// closingIssuesReferences), not the body text — duplicate nodes collapse to
+// one edge, and a reference to a nonexistent issue skips the link without
+// failing the run.
 func TestPRToIssueLinks(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	w.AddLinkVariants()
@@ -423,6 +423,24 @@ func TestPRToIssueLinks(t *testing.T) {
 	if err != nil || len(got) != 0 {
 		t.Errorf("nonexistent referenced issue must leave no edge: %+v, %v", got, err)
 	}
+}
+
+// Roadmap Milestone B: authoritative issue ↔ PR links. PR#9's body has no
+// close keyword, but GitHub links it to issue #1 (timeline event) — the
+// GraphQL closingIssuesReferences data the body regex could never see.
+func TestPRAuthoritativeIssueLinks(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddLinkVariants()
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1,
+		"github.com:issue:acme/widgets#1")
 }
 
 // TestSyncCI: workflow runs normalize to Build objects hanging off the repo

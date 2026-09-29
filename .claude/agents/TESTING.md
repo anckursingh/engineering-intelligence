@@ -62,13 +62,14 @@ Every persisted relationship type is a data contract — do not rename casually.
 
 | CONTAINS_BUILD | Repository → Build | new — the CI fetch's repo→run edge |
 | HAS_BUILD | PullRequest → Build | replaced PASSED — the edge carries no outcome; the conclusion lives on the Build |
+| PART_OF | Commit → PullRequest | new — PR-branch commits from the PR's commit list |
 
 ## Connector hardening (§13)
 
 - [x] 13.1 context-interruptible retry backoff — `TestSyncContextCancelDuringRetry` (cancel mid-backoff returns promptly, `errors.Is(err, context.Canceled)`); the test seam (`cfg.Sleep`) stays non-interruptible by design, production uses timer+select
 - [x] 13.2 incremental ingestion design — deferred: full-list polling stays until webhooks/events + cursor + reconciliation have equivalent acceptance coverage (do not build first)
 - [x] 13.3 merge commit model — `TestMergeCommitModel`: squash and rebase merges land their commit on the default branch (one MERGED_AS edge via the same history lookup); unavailable merge SHA leaves no edge, no error. PR→commits/head-commit/resulting-branch-state modeling joins when metrics need it
-- [x] 13.4 PR→issue linking — `TestPRToIssueLinks`: duplicate body references collapse to one IMPLEMENTS edge; a referenced issue that no longer exists (404) skips the link without failing the run. Authoritative linking data (GraphQL ClosingIssuesReferences) deferred — regex is fallback-only until it lands
+- [x] 13.4 PR→issue linking — authoritative now (item 39): the sync asks GitHub's GraphQL `closingIssuesReferences` per changed PR — `TestPRToIssueLinks` (duplicate nodes collapse to one IMPLEMENTS edge; a referenced issue that no longer exists (404) skips the link without failing the run) + `TestPRAuthoritativeIssueLinks` (a PR whose body has no close keyword still links — the timeline-event case the old body regex could never see). The regex is deleted; the on-demand issue refetch stays (issues outside the incremental window)
 - [x] Personal-account owners (dogfood-driven) — org endpoint first, user endpoint on 404: `TestSyncUserOwner` (org 404 → user fetch, owner is a User never an Organization, BELONGS_TO reaches `github.com:account:<login>`); `TestUserAccountKnowledgeObject` (account prefix never collides with login-keyed engineers); `TestPopulationFromUserScope` (scope walk is root-type-agnostic); fixture `githubtest.NewUserWorld`
 - [x] PR merged state from `merged_at` (dogfood-driven) — the PR list endpoint leaves `merged` nil (only the single-PR GET populates it), so every PR normalized as unmerged and the board's AI Development section found "no AI telemetry" although 1,942 contributions were stored: `TestToPullRequestMergedFromMergedAt` (merged_at set → Merged true — the authoritative merge signal; absent → false)
 
@@ -180,6 +181,15 @@ Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/metric
 - `TestSyncCI` — run 1: counts `{Build: {New: 4}}` (success, failure, in-progress, cancelled — the outcome-vocabulary AC needs every conclusion), repo→CONTAINS_BUILD outbound reaches all 4, PR#3→HAS_BUILD outbound reaches the success build; run 2 after `FinishInProgressBuild`: `{Updated: 1, Skipped: 3}` (the finished run re-normalizes; the settled ones watermark-skip). Stale `PASSED` edges in a pre-rename db are inert — nothing reads them.
 - `ci_pass_rate` (new candidate, so the board's Quality section and GET /metrics both grew): success / verdict runs × 100 where a verdict is success|failure|timed_out — cancelled/skipped runs never tested the code and a conclusion-less run is unclassifiable, so neither counts (`TestCIPassRateExact` — 2 success + 1 failure + 1 timed_out + 1 cancelled → 50.0, the 4 verdict builds cited; `TestCIPassRateExcludesNoVerdict`; `TestCIPassRateAbsence` — empty/out-of-window/only-cancelled → nil, silence is not zero). Anchored at completed_at (§19), CALCULATED with every counted Build in evidence.
 - Board: Quality carries ci_pass_rate when builds exist (`TestBoardQualityWithCI` — 3 success + 1 failure → 75.0 %) and the honest note otherwise; the population walk traverses CONTAINS_BUILD outbound (pinned in `TestPopulationFromScope`).
+
+## Authoritative issue links (item 39, post-contract — roadmap Milestone B)
+
+Suite: `internal/github` (`client.go`, `sync_test.go`).
+
+- Issue links now come from GitHub's authoritative data — GraphQL `closingIssuesReferences` per changed PR (posted through go-github's raw request path; v92 has no GraphQL method, and the raw path keeps the rate-limit retry). The body-keyword regex is deleted: GitHub resolves closing links from timeline events, keywords and manual edits, so the regex only ever saw a subset. A GraphQL-level error (auth scope, malformed query) fails the run — links are never silently dropped.
+- `TestPRAuthoritativeIssueLinks` — PR#9's body has no close keyword but GitHub links it to issue #1; the edge exists. `TestPRToIssueLinks` keeps its two legs with the authoritative data: duplicate nodes collapse to one IMPLEMENTS edge, a nonexistent issue (404) skips without failing. The on-demand issue refetch stays — it resolves numbers outside the incremental window, whatever the link source.
+- Fixture: `/graphql` answers `closingIssuesReferences` from `prCloses` per PR (PR#3 closes #1 — the same edge the regex produced, so every existing count pin holds).
+- Board and GET /metrics stay unchanged (7 definitions).
 
 ## Commit ↔ PR links (item 38, post-contract — roadmap Milestone B)
 
