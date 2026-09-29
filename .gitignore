@@ -19,3 +19,4 @@ aikoql-v2/
 .vscode/
 .DS_Store
 Thumbs.db
+aikoql.toml
