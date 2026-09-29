@@ -95,9 +95,9 @@ func openStore(dbDir string) (knowledge.KnowledgeStore, func(), error) {
 		c.Close()
 		return nil, nil, fmt.Errorf("initialize aikoql: %w", err)
 	}
-	// §32: pace tool calls at the server's calls-per-minute policy — the
-	// server rejects over-limit calls instead of delaying them.
-	return knowledge.NewAikoql(knowledge.NewPacedClient(c, 120)), func() { c.Close() }, nil
+	// §32: the server rejects over-limit calls instead of delaying them —
+	// retry those with backoff; a raised or disabled limit costs nothing.
+	return knowledge.NewAikoql(knowledge.NewRateLimitClient(c)), func() { c.Close() }, nil
 }
 
 func runGitHub(args []string) error {

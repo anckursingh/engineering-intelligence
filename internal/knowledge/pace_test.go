@@ -4,95 +4,126 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	aikoql "github.com/ancku/aikoql-sdk"
 )
 
-// fakeClock is a hand-advanced time source; the limiter's sleep is injected
-// too, so spacing tests are deterministic (no real time, no flakes).
-type fakeClock struct{ now time.Time }
-
-func (c *fakeClock) Now() time.Time          { return c.now }
-func (c *fakeClock) advance(d time.Duration) { c.now = c.now.Add(d) }
-func (c *fakeClock) sleep(_ context.Context, d time.Duration) error {
-	c.now = c.now.Add(d)
-	return nil
+// rateLimitErr mimics the SDK's wrap of the server's dispatcher rejection:
+// JSON-RPC -32000, "rate limit exceeded (max N calls/min)" (dispatcher.rs).
+func rateLimitErr() error {
+	return fmt.Errorf("aikoql: get: %w", &aikoql.McpError{Code: "-32000", Message: "rate limit exceeded (max 120 calls/min)"})
 }
 
-func paced(now func() time.Time, sleep func(context.Context, time.Duration) error, cap float64, rate float64) *rateLimiter {
-	return &rateLimiter{now: now, sleep: sleep, cap: cap, rate: rate, avail: cap, last: now()}
+// scriptDb returns one scripted (raw, err) per call, in order.
+type scriptRes struct {
+	raw json.RawMessage
+	err error
 }
 
-func TestRateLimiterSpacing(t *testing.T) {
-	clk := &fakeClock{now: time.Unix(0, 0)}
-	l := paced(clk.Now, clk.sleep, 2, 4) // burst 2, refill 4/s
-	ctx := context.Background()
-	for i := 0; i < 2; i++ {
-		if err := l.Wait(ctx); err != nil {
-			t.Fatalf("burst Wait %d: %v", i, err)
-		}
+type scriptDb struct {
+	calls int
+	res   []scriptRes
+}
+
+func (s *scriptDb) CallTool(_ context.Context, _ string, _ any) (json.RawMessage, error) {
+	r := s.res[s.calls]
+	s.calls++
+	return r.raw, r.err
+}
+
+// sleepRec records requested sleeps; err, when set, is returned instead.
+type sleepRec struct {
+	durs []time.Duration
+	err  error
+}
+
+func (s *sleepRec) sleep(_ context.Context, d time.Duration) error {
+	s.durs = append(s.durs, d)
+	return s.err
+}
+
+func retrying(db aikoqlDB, sleep func(context.Context, time.Duration) error) *rateLimitClient {
+	return &rateLimitClient{db: db, sleep: sleep}
+}
+
+func TestRateLimitRetriesUntilAccepted(t *testing.T) {
+	db := &scriptDb{res: []scriptRes{
+		{err: rateLimitErr()},
+		{raw: json.RawMessage(`{"koid":"k"}`)},
+	}}
+	sl := &sleepRec{}
+	out, err := retrying(db, sl.sleep).CallTool(context.Background(), "get", map[string]any{"koid": "k"})
+	if err != nil || string(out) != `{"koid":"k"}` {
+		t.Fatalf("CallTool = %s, %v; want payload, nil", out, err)
 	}
-	if got := clk.now.UnixNano(); got != 0 {
-		t.Fatalf("burst Waits advanced the clock to %d, want no sleep", got)
+	if db.calls != 2 {
+		t.Errorf("inner calls = %d, want 2", db.calls)
 	}
-	// Third and fourth calls consume refilled tokens: 250ms each at 4/s.
-	if err := l.Wait(ctx); err != nil {
+	if len(sl.durs) != 1 || sl.durs[0] != time.Second {
+		t.Errorf("sleeps = %v, want one of 1s", sl.durs)
+	}
+}
+
+func TestRateLimitBackoffGrows(t *testing.T) {
+	db := &scriptDb{res: []scriptRes{
+		{err: rateLimitErr()},
+		{err: rateLimitErr()},
+		{err: rateLimitErr()},
+		{raw: json.RawMessage(`{"ok":true}`)},
+	}}
+	sl := &sleepRec{}
+	if _, err := retrying(db, sl.sleep).CallTool(context.Background(), "get", nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := clk.now; !got.Equal(time.Unix(0, 250*int64(time.Millisecond))) {
-		t.Errorf("third Wait clock = %v, want 250ms", got)
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+	if len(sl.durs) != len(want) {
+		t.Fatalf("sleeps = %v, want %v", sl.durs, want)
 	}
-	if err := l.Wait(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if got := clk.now; !got.Equal(time.Unix(0, 500*int64(time.Millisecond))) {
-		t.Errorf("fourth Wait clock = %v, want 500ms", got)
-	}
-}
-
-func TestRateLimiterContextCancel(t *testing.T) {
-	clk := &fakeClock{now: time.Unix(0, 0)}
-	// Exhaust the burst, then cancel the waiting call: Wait must return the
-	// context error, not sleep forever.
-	l := paced(clk.Now, clk.sleep, 1, 1)
-	if err := l.Wait(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := l.Wait(ctx); !errors.Is(err, context.Canceled) {
-		t.Errorf("Wait = %v, want context.Canceled", err)
-	}
-}
-
-// callFunc adapts a plain function to aikoqlDB.
-type callFunc func(ctx context.Context, name string, args any) (json.RawMessage, error)
-
-func (f callFunc) CallTool(ctx context.Context, name string, args any) (json.RawMessage, error) {
-	return f(ctx, name, args)
-}
-
-func TestPacedClientForwardsAndSpaces(t *testing.T) {
-	clk := &fakeClock{now: time.Unix(0, 0)}
-	calls := 0
-	inner := callFunc(func(_ context.Context, name string, args any) (json.RawMessage, error) {
-		calls++
-		if name != "get" {
-			t.Errorf("tool = %q, want get", name)
-		}
-		return json.RawMessage(`{"koid":"k"}`), nil
-	})
-	p := &pacedClient{db: inner, l: paced(clk.Now, clk.sleep, 2, 4)}
-	for i := 0; i < 3; i++ {
-		out, err := p.CallTool(context.Background(), "get", map[string]any{"koid": "k"})
-		if err != nil || string(out) != `{"koid":"k"}` {
-			t.Fatalf("CallTool %d = %s, %v", i, out, err)
+	for i := range want {
+		if sl.durs[i] != want[i] {
+			t.Errorf("sleep %d = %v, want %v", i, sl.durs[i], want[i])
 		}
 	}
-	if calls != 3 {
-		t.Errorf("inner calls = %d, want 3", calls)
+}
+
+func TestRateLimitPassesOtherErrorsThrough(t *testing.T) {
+	boom := errors.New("aikoql: get: boom")
+	db := &scriptDb{res: []scriptRes{{err: boom}}}
+	sl := &sleepRec{}
+	if _, err := retrying(db, sl.sleep).CallTool(context.Background(), "get", nil); err != boom {
+		t.Errorf("err = %v, want the original, unretried", err)
 	}
-	if got := clk.now; !got.Equal(time.Unix(0, 250*int64(time.Millisecond))) {
-		t.Errorf("third call not spaced: clock = %v, want 250ms", got)
+	if db.calls != 1 {
+		t.Errorf("inner calls = %d, want 1 (no retry)", db.calls)
+	}
+	if len(sl.durs) != 0 {
+		t.Errorf("slept %v on a non-rate-limit error", sl.durs)
+	}
+}
+
+func TestRateLimitPassesSuccessThrough(t *testing.T) {
+	db := &scriptDb{res: []scriptRes{{raw: json.RawMessage(`{"ok":true}`)}}}
+	sl := &sleepRec{}
+	out, err := retrying(db, sl.sleep).CallTool(context.Background(), "get", nil)
+	if err != nil || string(out) != `{"ok":true}` {
+		t.Fatalf("CallTool = %s, %v", out, err)
+	}
+	if db.calls != 1 || len(sl.durs) != 0 {
+		t.Errorf("calls = %d, sleeps = %v; want 1 and none", db.calls, sl.durs)
+	}
+}
+
+func TestRateLimitSleepHonorsContext(t *testing.T) {
+	db := &scriptDb{res: []scriptRes{{err: rateLimitErr()}}}
+	sl := &sleepRec{err: context.Canceled}
+	_, err := retrying(db, sl.sleep).CallTool(context.Background(), "get", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if len(sl.durs) != 1 {
+		t.Errorf("sleeps = %v, want one attempt", sl.durs)
 	}
 }

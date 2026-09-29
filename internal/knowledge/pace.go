@@ -1,67 +1,57 @@
-// Pacing for the AIKOQL server's stdio rate policy (§32). The server
-// rejects calls beyond max_calls_per_minute instead of delaying them, so
-// the client spaces tool calls with a token bucket.
-//
-// ponytail: 120 is the server default and is not advertised on the wire;
-// make it configurable when a server with a different limit appears.
+// Rate limiting for the AIKOQL server's stdio policy (§32). The server
+// REJECTS calls beyond its max_calls_per_minute (JSON-RPC -32000, message
+// "rate limit exceeded (max N calls/min)" — dispatcher.rs) instead of
+// delaying them, so the client retries rejected calls with backoff. Every
+// EI tool call is idempotent (idempotency keys on remembers, version-keyed
+// updates, pure reads), so a rejected call is safe to re-issue; the context
+// bounds the retries. The limit itself lives server-side, so a raised or
+// disabled limit (aikoql.toml) costs no sleeps at all.
 package knowledge
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"sync"
+	"strings"
 	"time"
+
+	aikoql "github.com/ancku/aikoql-sdk"
 )
 
-const defaultCallsPerMinute = 120
+const (
+	rateLimitBackoffStart = time.Second
+	rateLimitBackoffMax   = 8 * time.Second
+)
 
-// rateLimiter is a token bucket: cap tokens burst, refilled at rate per
-// second. Wait consumes one token, sleeping across the bucket's refill
-// when it is empty.
-type rateLimiter struct {
-	mu    sync.Mutex
-	now   func() time.Time
+// isRateLimit reports whether err is the server's rate-policy rejection,
+// found through the SDK's %w wrapping of *aikoql.McpError.
+func isRateLimit(err error) bool {
+	var mcpErr *aikoql.McpError
+	return errors.As(err, &mcpErr) && strings.Contains(mcpErr.Message, "rate limit exceeded")
+}
+
+// rateLimitClient wraps aikoqlDB, retrying calls the server rejects over its
+// calls-per-minute policy with exponential backoff.
+type rateLimitClient struct {
+	db    aikoqlDB
 	sleep func(ctx context.Context, d time.Duration) error
-	cap   float64
-	rate  float64 // tokens per second
-	avail float64
-	last  time.Time
 }
 
-func (l *rateLimiter) Wait(ctx context.Context) error {
+func (r *rateLimitClient) CallTool(ctx context.Context, name string, args any) (json.RawMessage, error) {
+	backoff := rateLimitBackoffStart
 	for {
-		wait, ok := l.take()
-		if ok {
-			return nil
+		raw, err := r.db.CallTool(ctx, name, args)
+		if !isRateLimit(err) {
+			return raw, err
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := r.sleep(ctx, backoff); err != nil {
+			return nil, fmt.Errorf("aikoql rate limit: %w", err)
 		}
-		if err := l.sleep(ctx, wait); err != nil {
-			return err
+		if backoff *= 2; backoff > rateLimitBackoffMax {
+			backoff = rateLimitBackoffMax
 		}
 	}
-}
-
-// take consumes one token if available, otherwise returns how long to wait
-// for the next one (0, true means "token taken, go").
-func (l *rateLimiter) take() (time.Duration, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	l.avail += now.Sub(l.last).Seconds() * l.rate
-	if l.avail > l.cap {
-		l.avail = l.cap
-	}
-	l.last = now
-	if l.avail >= 1 {
-		l.avail--
-		return 0, true
-	}
-	return time.Duration((1 - l.avail) / l.rate * float64(time.Second)), false
 }
 
 func realSleep(ctx context.Context, d time.Duration) error {
@@ -73,27 +63,8 @@ func realSleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// pacedClient wraps aikoqlDB, consuming one token per tool call.
-type pacedClient struct {
-	db aikoqlDB
-	l  *rateLimiter
-}
-
-func (p *pacedClient) CallTool(ctx context.Context, name string, args any) (json.RawMessage, error) {
-	if err := p.l.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("aikoql rate limit: %w", err)
-	}
-	return p.db.CallTool(ctx, name, args)
-}
-
-// NewPacedClient wraps a tool-call surface so calls respect the server's
-// calls-per-minute policy. The burst cap equals the limit: short bursts
-// pass unthrottled while the sustained rate never trips it.
-func NewPacedClient(db aikoqlDB, callsPerMin int) aikoqlDB {
-	now := time.Now
-	return &pacedClient{db: db, l: &rateLimiter{
-		now: now, sleep: realSleep,
-		cap: float64(callsPerMin), rate: float64(callsPerMin) / 60,
-		avail: float64(callsPerMin), last: now(),
-	}}
+// NewRateLimitClient wraps a tool-call surface so calls rejected by the
+// server's calls-per-minute policy are retried with backoff.
+func NewRateLimitClient(db aikoqlDB) aikoqlDB {
+	return &rateLimitClient{db: db, sleep: realSleep}
 }
