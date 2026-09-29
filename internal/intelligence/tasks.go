@@ -87,5 +87,5 @@ func plural(n int, one, many string) string {
 // taskLimitations state what the report can and cannot see.
 var taskLimitations = []string{
 	"task location is the coding session — the finest identity the telemetry records; tasks carry no repository identity",
-	"only sessions reachable through a code contribution's producing task appear in the report",
+	"only sessions recorded on the scope's AI contributions appear in the report",
 }

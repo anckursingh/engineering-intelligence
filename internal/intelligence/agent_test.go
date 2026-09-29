@@ -274,6 +274,7 @@ func TestAskTaskFailures(t *testing.T) {
 	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: task.Koid})
 	contrib := upsert(t, store, mapKO(t, ontology.CodeContribution{
 		Source: "claude-code", ID: "c1", Repository: "acme/widgets", PRNumber: 1,
+		Session:     ontology.SessionExternalID("claude-code", "s1"),
 		Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
 	}.KnowledgeObject, prov))
 	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contrib.Koid, To: pr.Koid})

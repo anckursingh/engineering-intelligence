@@ -400,7 +400,7 @@ All applicable rows true before "done":
 
 - `TaskFailures(pop, win) []TaskFailureRow`: single-window engine — failed finished tasks only (Status == "failed" AND CompletedAt set AND in window), grouped by containing session via `pop.TaskSessions`, rows and each row's ids sorted (deterministic). Silence rules: unfinished and out-of-window tasks are never failures; no rows at all → "No agent tasks failed in the period."
 - Population change: `metrics.Population.TaskSessions map[string]string` — the task→session pairing the walk records via `collectSessionTasks` (the walk previously dropped it; `collectTelemetry` stays for interactions/runs since only tasks carry a location).
-- Agent: classify "task" + "fail" → `task_failures` (first clause — no change word required); `askTaskFailures` answers over the query's period; evidence = one AgentTask entry per failed task + one CodingSession entry per session, both OBSERVED and store-resolvable; limitations = taskLimitations (session is the finest location; only sessions reachable through a contribution's producing task appear).
+- Agent: classify "task" + "fail" → `task_failures` (first clause — no change word required); `askTaskFailures` answers over the query's period; evidence = one AgentTask entry per failed task + one CodingSession entry per session, both OBSERVED and store-resolvable; limitations = taskLimitations (session is the finest location; only sessions recorded on a contribution appear).
 - Tests: `TestTaskFailuresGroupsBySession`, `TestTaskFailuresStatement`, `TestAskTaskFailures`; `TestPopulationCollectsTelemetry` pins the TaskSessions pairing; `TestAskClassification` pins the new class.
 
 ## Milestone F exit — five-question acceptance mapping (item 47)

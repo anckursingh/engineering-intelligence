@@ -118,9 +118,10 @@ func TestPopulationFromScope(t *testing.T) {
 }
 
 // TestPopulationCollectsTelemetry: the walk reaches the session's
-// interactions, runs and tasks through the contribution's producing task —
-// contribution → AUTHORED inbound → task → CONTAINS_TASK inbound → session →
-// children. The path that feeds the board's AI workflow metrics (§27).
+// interactions, runs and tasks through the contribution's recorded session —
+// a first-hand ingest-time property, no edge hops that can be absent when
+// task links are unlinked. The path that feeds the board's AI workflow
+// metrics (§27).
 func TestPopulationCollectsTelemetry(t *testing.T) {
 	store := knowledge.NewMemory()
 	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
@@ -144,10 +145,10 @@ func TestPopulationCollectsTelemetry(t *testing.T) {
 	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: t2.Koid})
 	contrib := upsert(t, store, mapKO(t, ontology.CodeContribution{
 		Source: "claude-code", ID: "c1", Repository: "acme/widgets", PRNumber: 1,
+		Session:     ontology.SessionExternalID("claude-code", "s1"),
 		Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
 	}.KnowledgeObject, prov))
 	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contrib.Koid, To: pr.Koid})
-	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAuthored), From: t1.Koid, To: contrib.Koid})
 
 	pop, err := Population(context.Background(), store, ontology.OrgExternalID("acme"))
 	if err != nil {
@@ -158,8 +159,7 @@ func TestPopulationCollectsTelemetry(t *testing.T) {
 			len(pop.Interactions), len(pop.AgentRuns), len(pop.AgentTasks), len(pop.CodeContributions))
 	}
 	// TaskSessions records the session every collected task belongs to
-	// (item 46): t1 through the AUTHORED path, t2 as the session's other
-	// child — both map to s1.
+	// (item 46): both t1 and t2 as the session's CONTAINS_TASK children.
 	if len(pop.TaskSessions) != 2 {
 		t.Fatalf("TaskSessions = %d entries, want 2", len(pop.TaskSessions))
 	}
