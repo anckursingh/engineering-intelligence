@@ -153,6 +153,7 @@ func TestCycleTimeChangeFactorAppeared(t *testing.T) {
 	want := "Cycle time increased from 2.0 to 4.0 days. " +
 		"Review latency appeared in Month B at 2.0 days. " +
 		"Throughput decreased by 33.3%. " +
+		"Review cycles appeared in Month B at 0.0 cycles. " +
 		"The data supports an association, but does not establish causality."
 	if got.Statement != want {
 		t.Errorf("appeared statement = %q\nwant               %q", got.Statement, want)
@@ -162,6 +163,7 @@ func TestCycleTimeChangeFactorAppeared(t *testing.T) {
 	want = "Cycle time increased from 2.0 to 4.0 days. " +
 		"Review latency disappeared in Month B. " +
 		"Throughput decreased by 33.3%. " +
+		"Review cycles disappeared in Month B. " +
 		"The data supports an association, but does not establish causality."
 	if got.Statement != want {
 		t.Errorf("disappeared statement = %q\nwant                 %q", got.Statement, want)
