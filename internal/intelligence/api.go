@@ -74,6 +74,7 @@ type InvestigationResult struct {
 // API serves the §24 endpoints over one store.
 type API struct {
 	store knowledge.KnowledgeStore
+	board *boardCache
 	mux   *http.ServeMux
 	mu    sync.Mutex
 	next  int
@@ -81,7 +82,7 @@ type API struct {
 }
 
 func NewAPI(store knowledge.KnowledgeStore) *API {
-	a := &API{store: store, done: map[string]InvestigationResult{}}
+	a := &API{store: store, board: newBoardCache(time.Minute), done: map[string]InvestigationResult{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", a.handleHealth)
 	mux.HandleFunc("GET /metrics", a.handleMetrics)
@@ -90,6 +91,7 @@ func NewAPI(store knowledge.KnowledgeStore) *API {
 	mux.HandleFunc("GET /investigations/{id}", a.handleGetInvestigation)
 	mux.HandleFunc("GET /board", a.handleBoard)
 	mux.HandleFunc("POST /ask", a.handleAsk)
+	mux.HandleFunc("GET /{$}", a.handleDashboard)
 	a.mux = mux
 	return a
 }

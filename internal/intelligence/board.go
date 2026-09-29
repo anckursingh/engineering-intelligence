@@ -8,6 +8,7 @@
 package intelligence
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -101,6 +102,9 @@ func evidenceCoverage(items []boardItem) boardSection {
 }
 
 // handleBoard serves GET /board?scope=<extID>&start=<RFC3339>&end=<RFC3339>.
+// Responses are memoized per scope+window (TTL cache + ETag revalidation):
+// the board is deterministic per key and the store is immutable while a
+// server holds the db.
 func (a *API) handleBoard(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	start, err := time.Parse(time.RFC3339, q.Get("start"))
@@ -111,6 +115,11 @@ func (a *API) handleBoard(w http.ResponseWriter, r *http.Request) {
 	end, err := time.Parse(time.RFC3339, q.Get("end"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "end must be RFC3339")
+		return
+	}
+	key := q.Get("scope") + "|" + q.Get("start") + "|" + q.Get("end")
+	if body, etag, ok := a.board.get(key); ok {
+		writeBoardBytes(w, r, body, etag)
 		return
 	}
 	pop, err := Population(r.Context(), a.store, q.Get("scope"))
@@ -124,5 +133,23 @@ func (a *API) handleBoard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, buildBoard(pop, metrics.Window{Start: start, End: end}))
+	body, err := json.Marshal(buildBoard(pop, metrics.Window{Start: start, End: end}))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "marshal board: "+err.Error())
+		return
+	}
+	writeBoardBytes(w, r, body, a.board.put(key, body))
+}
+
+func writeBoardBytes(w http.ResponseWriter, r *http.Request, body []byte, etag string) {
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache") // revalidate against the TTL cache
+	// A write error here is unreportable — the client is gone and the
+	// handler has no error channel left.
+	_, _ = w.Write(body)
 }

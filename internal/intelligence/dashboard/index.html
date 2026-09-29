@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Engineering Intelligence</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%236366f1' d='M12 2l9 5-9 5-9-5z'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#09090b; --bg-soft:#0e0e11; --card:#131316; --card-hover:#17171b;
+  --border:#232327; --border-soft:#1c1c20;
+  --text:#f4f4f5; --muted:#a1a1aa; --faint:#6b6b74;
+  --accent:#6366f1; --accent-text:#a5b4fc; --accent-soft:rgba(99,102,241,.14);
+  --green:#34d399; --green-soft:rgba(52,211,153,.12);
+  --amber:#fbbf24; --amber-soft:rgba(251,191,36,.12);
+  --red:#f87171; --red-soft:rgba(248,113,113,.12);
+  --violet:#c4b5fd; --violet-soft:rgba(196,181,253,.12);
+  --radius:12px;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#fafafa; --bg-soft:#f4f4f5; --card:#ffffff; --card-hover:#fafafa;
+    --border:#e4e4e7; --border-soft:#eeeeef;
+    --text:#18181b; --muted:#5f5f66; --faint:#9f9fa8;
+    --accent:#4f46e5; --accent-text:#4338ca; --accent-soft:rgba(79,70,229,.10);
+    --green:#059669; --green-soft:rgba(5,150,105,.10);
+    --amber:#b45309; --amber-soft:rgba(180,83,9,.10);
+    --red:#dc2626; --red-soft:rgba(220,38,38,.10);
+    --violet:#7c3aed; --violet-soft:rgba(124,58,237,.10);
+    --shadow:0 1px 2px rgba(0,0,0,.06);
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font:14px/1.5 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased; min-height:100vh;
+}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+/* header */
+.topbar{
+  position:sticky; top:0; z-index:10;
+  background:color-mix(in srgb,var(--bg) 82%,transparent);
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+}
+.topbar-inner{
+  max-width:1180px; margin:0 auto; padding:12px 20px;
+  display:flex; flex-wrap:wrap; gap:12px; align-items:center;
+}
+.brand{display:flex; align-items:center; gap:9px; font-weight:650; letter-spacing:-.02em; font-size:15px}
+.brand .logo{
+  width:26px; height:26px; border-radius:7px; flex:none;
+  background:linear-gradient(135deg,var(--accent),#8b5cf6);
+  display:grid; place-items:center; color:#fff; font-size:13px;
+}
+.brand small{display:block; font-weight:400; color:var(--faint); font-size:11.5px; letter-spacing:0}
+.controls{margin-left:auto; display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end}
+.field{display:flex; flex-direction:column; gap:4px}
+.field label{font-size:11px; color:var(--faint); letter-spacing:.04em; text-transform:uppercase; font-weight:600}
+.field input,.field select{
+  background:var(--bg-soft); border:1px solid var(--border); border-radius:8px;
+  padding:7px 10px; font-size:13px; min-width:0; color:var(--text);
+}
+.field input[type=date]{color-scheme:dark}
+.field input:hover,.field select:hover{border-color:var(--faint)}
+#scope{width:230px}
+#preset{width:130px}
+#refresh{
+  background:var(--accent); color:#fff; border:none; border-radius:8px;
+  padding:8px 14px; font-weight:600; cursor:pointer; font-size:13px;
+}
+#refresh:hover{filter:brightness(1.1)}
+#refresh.spinning .icon{display:inline-block;animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* main */
+main{max-width:1180px; margin:0 auto; padding:28px 20px 60px}
+#status{color:var(--faint); font-size:12.5px; margin-bottom:18px; display:flex; gap:14px; align-items:center; flex-wrap:wrap}
+#status .dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block}
+#status.error .dot{background:var(--red)}
+#error{
+  display:none; margin:0 0 20px; padding:13px 16px; border-radius:var(--radius);
+  background:var(--red-soft); border:1px solid color-mix(in srgb,var(--red) 40%,transparent); color:var(--text);
+}
+#error button{margin-left:12px; background:transparent; border:1px solid var(--red); color:var(--red); border-radius:7px; padding:4px 12px; cursor:pointer}
+
+/* sections */
+section{margin-bottom:34px}
+.sec-head{display:flex; align-items:baseline; gap:10px; margin-bottom:14px}
+.sec-head h2{margin:0; font-size:15px; font-weight:650; letter-spacing:-.01em}
+.sec-head .sec-sub{color:var(--faint); font-size:12px}
+.grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px}
+.card{
+  background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+  padding:18px; box-shadow:var(--shadow); transition:border-color .15s;
+}
+.card:hover{border-color:var(--faint)}
+.card-top{display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px}
+.metric-label{color:var(--muted); font-size:12.5px; font-weight:600; letter-spacing:.01em}
+.badge{
+  font-size:10.5px; font-weight:700; letter-spacing:.06em; padding:3px 8px; border-radius:99px;
+  background:var(--accent-soft); color:var(--accent-text); white-space:nowrap;
+}
+.badge.observed{background:var(--green-soft);color:var(--green)}
+.badge.inferred{background:var(--amber-soft);color:var(--amber)}
+.badge.hypothesized{background:var(--violet-soft);color:var(--violet)}
+.badge.unknown{background:var(--border);color:var(--faint)}
+.metric-value{
+  font-size:30px; font-weight:650; letter-spacing:-.03em; line-height:1.1;
+  font-variant-numeric:tabular-nums;
+}
+.metric-value .unit{font-size:15px; font-weight:500; color:var(--muted); margin-left:5px; letter-spacing:0}
+details.evidence{margin-top:14px; border-top:1px solid var(--border-soft); padding-top:10px}
+details.evidence summary{
+  cursor:pointer; color:var(--faint); font-size:12px; user-select:none; list-style:none;
+}
+details.evidence summary::before{content:"▸ ";display:inline-block;transition:transform .12s}
+details.evidence[open] summary::before{transform:rotate(90deg)}
+details.evidence ul{margin:8px 0 0; padding:0 0 0 14px; max-height:170px; overflow:auto}
+details.evidence li{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px;
+  color:var(--muted); list-style:none; padding:2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ev-count{font-weight:600; color:var(--muted)}
+
+/* empty-state notes */
+.note{
+  background:var(--bg-soft); border:1px dashed var(--border); border-radius:var(--radius);
+  padding:16px 18px; color:var(--muted); font-size:13px;
+}
+.note b{color:var(--text); font-weight:600}
+
+/* coverage bar */
+.covbar{display:flex; height:10px; border-radius:99px; overflow:hidden; background:var(--border-soft); margin-top:8px}
+.covbar span{display:block; height:100%}
+.cov-legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-size:12px; color:var(--muted)}
+.cov-legend i{display:inline-block; width:9px; height:9px; border-radius:3px; margin-right:6px}
+.cov-legend b{font-variant-numeric:tabular-nums; color:var(--text)}
+
+/* skeleton */
+.sk-card{
+  background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+  padding:18px; min-height:120px;
+  background:linear-gradient(100deg,var(--card) 40%,var(--card-hover) 50%,var(--card) 60%);
+  background-size:200% 100%; animation:shimmer 1.4s infinite;
+}
+@keyframes shimmer{to{background-position:-200% 0}}
+
+footer{
+  max-width:1180px; margin:0 auto; padding:0 20px 40px; color:var(--faint); font-size:12px;
+  display:flex; gap:16px; flex-wrap:wrap;
+}
+@media (prefers-reduced-motion:reduce){
+  .sk-card{animation:none}
+  #refresh.spinning .icon{animation:none}
+  *{transition:none}
+}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <div class="brand">
+    <span class="logo">◆</span>
+    <span>Engineering Intelligence<small>deterministic metrics over the knowledge graph</small></span>
+  </div>
+  <div class="controls">
+    <div class="field"><label for="scope">Scope</label>
+      <input id="scope" type="text" spellcheck="false" placeholder="github.com:account:you" aria-label="Scope external ID"></div>
+    <div class="field"><label for="preset">Window</label>
+      <select id="preset" aria-label="Window preset">
+        <option value="30">Last 30 days</option>
+        <option value="60" selected>Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="ytd">Year to date</option>
+        <option value="custom">Custom</option>
+      </select></div>
+    <div class="field"><label for="from">From</label><input id="from" type="date" aria-label="Window start"></div>
+    <div class="field"><label for="to">To</label><input id="to" type="date" aria-label="Window end"></div>
+    <button id="refresh" title="Refresh (revalidates via ETag)"><span class="icon">↻</span> Refresh</button>
+  </div>
+</div></header>
+
+<main>
+  <div id="status" role="status"><span class="dot"></span><span id="updated"></span><span id="cachehint"></span></div>
+  <div id="error" role="alert"><span id="errmsg"></span><button id="retry">Retry</button></div>
+  <div id="skeleton" aria-hidden="true">
+    <div class="grid"><div class="sk-card"></div><div class="sk-card"></div><div class="sk-card"></div></div>
+  </div>
+  <div id="board" hidden></div>
+</main>
+<footer id="foot"></footer>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const LS_BOARD = "ei.lastBoard", LS_SCOPE = "ei.scope", LS_WIN = "ei.window";
+let lastEtag = null, lastLoad = null;
+
+const iso = d => d.toISOString().slice(0, 10);
+const startOf = n => { const d = new Date(); d.setDate(d.getDate() - n); return d; };
+const ytd = () => { const d = new Date(); d.setMonth(0, 1); return d; };
+
+function readWin() {
+  try {
+    const w = JSON.parse(localStorage.getItem(LS_WIN));
+    if (w && w.from && w.to) return w;
+  } catch {}
+  return { from: iso(startOf(60)), to: iso(new Date()) };
+}
+let win = readWin();
+
+function applyPreset() {
+  const v = $("preset").value;
+  const today = iso(new Date());
+  if (v === "custom") return;
+  if (v === "ytd") { win = { from: iso(ytd()), to: today }; }
+  else { win = { from: iso(startOf(Number(v))), to: today }; }
+  $("from").value = win.from; $("to").value = win.to;
+}
+
+function fmtValue(v, unit) {
+  if (unit === "%") return v.toFixed(1) + "%";
+  if (unit === "days") {
+    if (v < 1) { const mins = v * 24 * 60; return mins < 60 ? Math.round(mins) + " min" : (mins / 60).toFixed(1) + " h"; }
+    return v.toFixed(1) + " d";
+  }
+  if (unit === "PRs" || unit === "objects") return Math.round(v).toLocaleString();
+  return v.toFixed(1) + (unit ? " " + unit : "");
+}
+
+const stateColor = { CALCULATED: "var(--accent)", OBSERVED: "var(--green)", INFERRED: "var(--amber)", HYPOTHESIZED: "var(--violet)", UNKNOWN: "var(--faint)" };
+
+function evidenceBlock(ev) {
+  if (!ev || !ev.length) return "";
+  const total = ev.reduce((n, e) => n + (e.object_ids || []).length, 0);
+  const types = [...new Set(ev.map(e => e.type))].join(", ");
+  const ids = ev.flatMap(e => e.object_ids || []);
+  const shown = ids.slice(0, 8), rest = ids.length - shown.length;
+  return `<details class="evidence"><summary><span class="ev-count">${total}</span> object${total === 1 ? "" : "s"} · ${types}</summary>
+    <ul>${shown.map(id => `<li title="${id}">${id}</li>`).join("")}${rest > 0 ? `<li>… ${rest} more</li>` : ""}</ul></details>`;
+}
+
+function metricCard(it) {
+  const cls = "badge " + it.epistemic_state.toLowerCase();
+  return `<article class="card">
+    <div class="card-top"><span class="metric-label">${it.label}</span><span class="${cls}">${it.epistemic_state}</span></div>
+    <div class="metric-value">${fmtValue(it.value, it.unit)}<span class="unit">${it.unit}</span></div>
+    ${evidenceBlock(it.evidence)}
+  </article>`;
+}
+
+function coverageBar(items) {
+  const total = items.reduce((n, it) => n + it.value, 0);
+  if (!total) return "";
+  const segs = items.map(it =>
+    `<span style="width:${(it.value / total * 100).toFixed(2)}%;background:${stateColor[it.label] || "var(--faint)"}" title="${it.label}: ${it.value}"></span>`).join("");
+  const legend = items.map(it =>
+    `<span><i style="background:${stateColor[it.label] || "var(--faint)"}"></i>${it.label} <b>${Math.round(it.value).toLocaleString()}</b></span>`).join("");
+  return `<div class="covbar" role="img" aria-label="evidence per epistemic state">${segs}</div><div class="cov-legend">${legend}</div>`;
+}
+
+function sectionHTML(s) {
+  let body;
+  if (s.id === "evidence_coverage") body = coverageBar(s.items || []);
+  else if (s.items && s.items.length) body = `<div class="grid">${s.items.map(metricCard).join("")}</div>`;
+  else body = `<div class="note">${s.note || "no data"}</div>`;
+  const n = s.items ? ` · ${s.items.length}` : "";
+  return `<section><div class="sec-head"><h2>${s.title}</h2><span class="sec-sub">${n}</span></div>${body}</section>`;
+}
+
+function paint(body) {
+  $("skeleton").hidden = true;
+  $("board").hidden = false;
+  $("board").innerHTML = body.sections.map(sectionHTML).join("");
+}
+
+function setUpdated(when) {
+  lastLoad = when || new Date();
+  const ago = Math.max(0, Math.round((Date.now() - lastLoad.getTime()) / 1000));
+  const s = ago < 60 ? "just now" : ago < 3600 ? Math.round(ago / 60) + "m ago" : Math.round(ago / 3600) + "h ago";
+  $("updated").textContent = "Updated " + s;
+  $("cachehint").textContent = "server-side cache · ETag revalidation";
+}
+
+function showError(msg) {
+  $("status").classList.add("error");
+  $("error").style.display = "block";
+  $("errmsg").textContent = msg;
+}
+
+function clearError() { $("status").classList.remove("error"); $("error").style.display = "none"; }
+
+async function load(force) {
+  clearError();
+  const scope = $("scope").value.trim();
+  if (!scope) { showError("Enter a scope — e.g. github.com:account:you"); return; }
+  localStorage.setItem(LS_SCOPE, scope);
+  localStorage.setItem(LS_WIN, JSON.stringify(win));
+  $("refresh").classList.add("spinning");
+  const url = `/board?scope=${encodeURIComponent(scope)}&start=${encodeURIComponent(win.from + "T00:00:00Z")}&end=${encodeURIComponent(win.to + "T23:59:59Z")}`;
+  try {
+    const res = await fetch(url, { headers: lastEtag ? { "If-None-Match": lastEtag } : {} });
+    if (res.status === 304) { setUpdated(); return; }
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      showError(e.error || ("HTTP " + res.status));
+      return;
+    }
+    lastEtag = res.headers.get("ETag");
+    const body = await res.json();
+    try { localStorage.setItem(LS_BOARD, JSON.stringify(body)); } catch {}
+    paint(body);
+    setUpdated();
+  } catch {
+    showError("Unreachable — is `ei serve` running?");
+  } finally {
+    $("refresh").classList.remove("spinning");
+  }
+}
+
+function init() {
+  // Instant paint from the last good board, then revalidate.
+  try {
+    const cached = localStorage.getItem(LS_BOARD);
+    if (cached) { paint(JSON.parse(cached)); setUpdated(new Date(0)); }
+  } catch {}
+  const qs = new URLSearchParams(location.search);
+  $("scope").value = qs.get("scope") || localStorage.getItem(LS_SCOPE) || "";
+  $("from").value = win.from; $("to").value = win.to;
+  $("foot").textContent = "Engineering Intelligence · metrics are deterministic over ingested objects; honest gaps are notes, never fabricated numbers · " + new Date().getFullYear();
+
+  $("preset").addEventListener("change", () => { applyPreset(); load(); });
+  $("from").addEventListener("change", () => { $("preset").value = "custom"; win.from = $("from").value; load(); });
+  $("to").addEventListener("change", () => { $("preset").value = "custom"; win.to = $("to").value; load(); });
+  $("scope").addEventListener("keydown", e => { if (e.key === "Enter") load(); });
+  $("refresh").addEventListener("click", () => load());
+  $("retry").addEventListener("click", () => load());
+
+  load();
+  setInterval(() => { if (lastLoad) setUpdated(); }, 30000);
+}
+init();
+</script>
+</body>
+</html>

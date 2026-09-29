@@ -168,6 +168,19 @@ Suite: `internal/intelligence` (`board_test.go`; Memory + live AikoqlStore).
 - No individual ranking (`TestBoardNoIndividualRanking`) — by construction: items cite only PR/review/contribution objects. Check structurally (no `Engineer`/`SourceIdentity` evidence types, no identity keys) — the word "Engineering" trips a substring check on the doc's own title.
 - Unknown scope → 400 (a navigation typo; POST /investigations keeps 500 — there scope comes from a request body). "What changed / why" stays the investigations endpoint's job.
 
+## Dashboard + board caching (item 31, post-contract)
+
+Suite: `internal/intelligence` (`board_ui_test.go`, `cache.go`; Memory store + httptest).
+
+- `GET /{$}` serves the embedded dashboard (`TestDashboardServed` — 200 text/html, contains "Engineering Intelligence"); the exact-root pattern keeps unknown paths 404 (the test also pins `/nope`).
+- `boardCache` memoizes board responses per `scope|start|end` (TTL 60s, sha256 ETag, injectable `now` clock; errors are never cached — put only on success). Safe because the board is deterministic per key and one server per db dir means no writer exists while `ei serve` holds the db.
+- `TestBoardCacheSecondRequestSkipsStore` — a `countingStore` wrapper proves the second identical request performs zero store reads, returns the identical body and ETag.
+- `TestBoardCacheETagRevalidates` — `If-None-Match` with the cached ETag → 304, empty body.
+- `TestBoardCacheKeyedByWindowAndScope` — a different window/scope misses (store reads increase, different ETag).
+- `TestBoardCacheExpires` — clock injection past the TTL recomputes.
+- `TestBoardCacheNeverCachesErrors` — a failing store returns 500 and caches nothing; once unfailed, the next request recomputes (reads increase) and serves 200.
+- Client: the page sends `If-None-Match` manually (fetch never auto-revalidates), keeps the last good board in localStorage for instant paint, and a 304 keeps the painted data — revalidation, not staleness.
+
 ## Evidence-backed engineering agent (§29)
 
 Suite: `internal/intelligence` (`agent_test.go`; Memory + live AikoqlStore).
