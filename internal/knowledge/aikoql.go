@@ -12,8 +12,12 @@
 //     adapter keeps its own ExternalIDIndex objects (one per domain object)
 //     and checks type_name client-side — ErrTypeConflict never reaches the
 //     server's no-op path.
-//   - GetByExternalID: no untyped KOQL exists (MATCH * and unknown entity
-//     names are COMPILE_ERROR), so lookups go through ExternalIDIndex.
+//   - GetByExternalID: lookups go through the server's idempotency-key
+//     tool (get_by_idem) — the O(1) engine path, exposed read-only for the
+//     adapter. A MATCH on ExternalIDIndex would be a full type scan without
+//     a property index (~600 ms at 150K objects, dogfood-measured), so the
+//     ExternalIDIndex objects exist only for MATCH-style consumers, not for
+//     the adapter's own lookups.
 //   - relate is set-semantic (duplicates are no-ops) and bumps the FROM
 //     object's version; server-side traverse is UNDIRECTED and ignores the
 //     direction argument — hits carry a per-hit "direction" label relative
@@ -35,7 +39,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"github.com/ancku/aikoql-sdk"
 )
@@ -360,29 +363,27 @@ type indexEntry struct {
 	TypeName string
 }
 
-// indexGet runs the typed MATCH against the index objects. COMPILE_ERROR
-// means the index type does not exist yet (fresh database) — not found.
+// indexGet resolves an external ID through the server's idempotency-key
+// lookup (get_by_idem) — the O(1) engine path that remember's exact-once
+// replay uses. It returns the DOMAIN object directly, which also self-heals
+// orphaned index entries (a crash can leave a domain object without its
+// index row; the old MATCH path would then treat it as missing). NOT_FOUND
+// maps to ErrNotFound via mapErr.
+//
+// ponytail: a MATCH on ExternalIDIndex was the original lookup, but without
+// a property index the server falls back to a full type scan — ~600 ms per
+// lookup at 150K objects, O(n) and growing. Dogfood-measured; keep the O(1)
+// path.
 func (s *AikoqlStore) indexGet(ctx context.Context, externalID string) (indexEntry, error) {
-	q := fmt.Sprintf(`MATCH %s WHERE external_id == "%s" RETURN *`, idxType, escapeKoqlLiteral(externalID))
-	raw, err := s.db.CallTool(ctx, "aikoql", map[string]any{"query": q})
+	raw, err := s.db.CallTool(ctx, "get_by_idem", map[string]any{"key": externalID})
 	if err != nil {
-		var me *aikoql.McpError
-		if errors.As(err, &me) && me.Code == "COMPILE_ERROR" {
-			return indexEntry{}, fmt.Errorf("%w: %s", ErrNotFound, me.Message)
-		}
-		return indexEntry{}, mapErr("index lookup", err)
+		return indexEntry{}, mapErr("idem lookup", err)
 	}
-	var res struct {
-		Results []koWire `json:"results"`
+	var w koWire
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return indexEntry{}, fmt.Errorf("aikoql idem payload: %w", err)
 	}
-	if err := json.Unmarshal(raw, &res); err != nil {
-		return indexEntry{}, fmt.Errorf("aikoql index lookup payload: %w", err)
-	}
-	if len(res.Results) == 0 {
-		return indexEntry{}, fmt.Errorf("%w: %s", ErrNotFound, externalID)
-	}
-	p := res.Results[0].Properties
-	return indexEntry{KOID: p["koid"].(string), TypeName: p["type_name"].(string)}, nil
+	return indexEntry{KOID: w.KOID, TypeName: w.TypeName}, nil
 }
 
 // Relate adds an edge; duplicates collapse server-side (set semantics).
@@ -552,10 +553,3 @@ func mapErr(name string, err error) error {
 }
 
 func idxKey(externalID string) string { return "idx:" + externalID }
-
-// escapeKoqlLiteral quotes an external ID into a KOQL string literal.
-// ponytail: assumes KOQL escapes are JSON-like (\" and \\); verify against
-// the grammar if external IDs ever contain other control characters.
-func escapeKoqlLiteral(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
-}

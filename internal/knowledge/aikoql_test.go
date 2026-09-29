@@ -161,11 +161,11 @@ func TestAikoqlErrorMapping(t *testing.T) {
 
 func TestAikoqlTypeConflictViaIndex(t *testing.T) {
 	f := &fakeDB{script: []fakeCall{{
-		tool: "aikoql",
-		out: rawJSON(t, map[string]any{"results": []map[string]any{{
-			"koid": "k1", "type_name": "Issue", "version": 1,
-			"properties": map[string]any{"external_id": "e1", "koid": "k1", "type_name": "Issue"},
-		}}}),
+		tool: "get_by_idem",
+		out: rawJSON(t, map[string]any{
+			"koid": "k1", "version": 1, "type_name": "Issue",
+			"properties": map[string]any{"external_id": "e1"},
+		}),
 	}}}
 	s := knowledge.NewAikoql(f)
 	_, err := s.Upsert(context.Background(), knowledge.KnowledgeObject{
@@ -178,7 +178,7 @@ func TestAikoqlTypeConflictViaIndex(t *testing.T) {
 
 func TestAikoqlCreateWritesIndexAndInjectsBookkeeping(t *testing.T) {
 	f := &fakeDB{script: []fakeCall{
-		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}}, // fresh DB
+		{tool: "get_by_idem", err: &aikoql.McpError{Code: "NOT_FOUND", Message: "not found: idempotency key 'e1'"}}, // fresh DB
 		{tool: "remember", out: rawJSON(t, map[string]any{"koid": "k1", "version": 1, "commit_ts": 1})},
 		{tool: "get", out: rawJSON(t, map[string]any{
 			"koid": "k1", "version": 1, "type_name": "Issue",
@@ -219,7 +219,7 @@ func TestAikoqlCreateDetectsCrossTypeSilentReturn(t *testing.T) {
 	// Server's global key index returns an existing object of another type
 	// without error — the adapter must detect it, not trust the remember.
 	f := &fakeDB{script: []fakeCall{
-		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []any{}})},
+		{tool: "get_by_idem", err: &aikoql.McpError{Code: "NOT_FOUND", Message: "not found: idempotency key 'e1'"}},
 		{tool: "remember", out: rawJSON(t, map[string]any{"koid": "k1", "version": 1, "commit_ts": 1})},
 		{tool: "get", out: rawJSON(t, map[string]any{
 			"koid": "k1", "version": 1, "type_name": "Issue",
@@ -239,16 +239,17 @@ func TestAikoqlCreateDetectsCrossTypeSilentReturn(t *testing.T) {
 }
 
 func TestAikoqlUpdateBumpsVersionOnChangeOnly(t *testing.T) {
-	base := []map[string]any{{
-		"koid": "k1", "type_name": "Issue", "version": 1,
-		"properties": map[string]any{"external_id": "e1", "koid": "k1", "type_name": "Issue"},
-	}}
+	// get_by_idem returns the DOMAIN object directly (not the index row).
+	base := map[string]any{
+		"koid": "k1", "version": 1, "type_name": "Issue",
+		"properties": map[string]any{"external_id": "e1", "n": float64(1)},
+	}
 	getObj := map[string]any{
 		"koid": "k1", "version": 1, "type_name": "Issue",
 		"properties": map[string]any{"external_id": "e1", "n": float64(1)},
 	}
 	f := &fakeDB{script: []fakeCall{
-		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": base})},
+		{tool: "get_by_idem", out: rawJSON(t, base)},
 		{tool: "get", out: rawJSON(t, getObj)},
 		{tool: "remember", out: rawJSON(t, map[string]any{"koid": "k1", "version": 2, "commit_ts": 1})},
 	}}
@@ -342,10 +343,10 @@ func TestAikoqlDepthZeroRejected(t *testing.T) {
 // rerun updates every object (AC-ING-005).
 func TestAikoqlUpsertIgnoresReservedKeysInCompare(t *testing.T) {
 	f := &fakeDB{script: []fakeCall{
-		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []map[string]any{{
+		{tool: "get_by_idem", out: rawJSON(t, map[string]any{
 			"koid": "k1", "type_name": "Issue", "version": 1,
-			"properties": map[string]any{"external_id": "e1", "koid": "k1", "type_name": "Issue"},
-		}}})},
+			"properties": map[string]any{"external_id": "e1", "n": float64(1)},
+		})},
 		{tool: "get", out: rawJSON(t, map[string]any{
 			"koid": "k1", "version": 1, "type_name": "Issue",
 			"properties": map[string]any{"n": float64(1)},
@@ -391,16 +392,17 @@ func TestAikoqlContextCancellation(t *testing.T) {
 	}
 }
 
-// The index lookup escapes external IDs into the KOQL string literal.
-func TestAikoqlIndexLookupEscapesQuotes(t *testing.T) {
-	f := &fakeDB{script: []fakeCall{{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []any{}})}}}
+// The idem lookup passes the external ID as a plain key argument — no KOQL
+// string literal, so there is nothing to escape. A hostile ID is data, not
+// a query fragment; the server just misses on it.
+func TestAikoqlIndexLookupPassesKeyVerbatim(t *testing.T) {
+	f := &fakeDB{script: []fakeCall{{tool: "get_by_idem", err: notFoundErr("get_by_idem", "k9")}}}
 	s := knowledge.NewAikoql(f)
 	if _, err := s.GetByExternalID(context.Background(), `evil" OR "1`); !errors.Is(err, knowledge.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
-	q, _ := f.calls[0].args["query"].(string)
-	if !strings.Contains(q, `\"`) {
-		t.Errorf("query not escaped: %s", q)
+	if key, _ := f.calls[0].args["key"].(string); key != `evil" OR "1` {
+		t.Errorf("key = %q, want passed verbatim", key)
 	}
 }
 
@@ -410,19 +412,19 @@ func TestAikoqlIndexLookupEscapesQuotes(t *testing.T) {
 func TestAikoqlBatchUpsertWire(t *testing.T) {
 	// A: absent → create. B: present, identical → skip. C: present, changed → update.
 	f := &fakeDB{script: []fakeCall{
-		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}}, // A lookup
-		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []map[string]any{{
+		{tool: "get_by_idem", err: &aikoql.McpError{Code: "NOT_FOUND", Message: "not found: idempotency key 'a'"}}, // A lookup
+		{tool: "get_by_idem", out: rawJSON(t, map[string]any{
 			"koid": "kb", "type_name": "Issue", "version": 1,
-			"properties": map[string]any{"koid": "kb", "type_name": "Issue", "n": float64(2)},
-		}}})}, // B lookup
+			"properties": map[string]any{"n": float64(2)},
+		})}, // B lookup
 		{tool: "get", out: rawJSON(t, map[string]any{
 			"koid": "kb", "version": 1, "type_name": "Issue",
 			"properties": map[string]any{"n": float64(2)},
 		})},
-		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []map[string]any{{
+		{tool: "get_by_idem", out: rawJSON(t, map[string]any{
 			"koid": "kc", "type_name": "Issue", "version": 3,
-			"properties": map[string]any{"koid": "kc", "type_name": "Issue", "n": float64(0)},
-		}}})}, // C lookup
+			"properties": map[string]any{"n": float64(0)},
+		})}, // C lookup
 		{tool: "get", out: rawJSON(t, map[string]any{
 			"koid": "kc", "version": 3, "type_name": "Issue",
 			"properties": map[string]any{"n": float64(0)},
@@ -495,8 +497,8 @@ func TestAikoqlBatchUpsertWire(t *testing.T) {
 
 func TestAikoqlBatchUpsertReportsFirstFailedObject(t *testing.T) {
 	f := &fakeDB{script: []fakeCall{
-		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}},
-		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}},
+		{tool: "get_by_idem", err: &aikoql.McpError{Code: "NOT_FOUND", Message: "not found: idempotency key 'a'"}},
+		{tool: "get_by_idem", err: &aikoql.McpError{Code: "NOT_FOUND", Message: "not found: idempotency key 'b'"}},
 		{tool: "batch", out: rawJSON(t, map[string]any{"results": []map[string]any{
 			{"op": "remember", "ok": false, "error": "boom"},
 			{"op": "remember", "ok": true, "result": map[string]any{"koid": "kb", "version": 1, "commit_ts": 1}},

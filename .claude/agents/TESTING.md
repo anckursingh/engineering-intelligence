@@ -231,10 +231,11 @@ Invariant: **never advance a committed checkpoint beyond data that has not been 
 ## Performance baselines (§32)
 
 - [x] per-op latency, live server over stdio (fresh DB per bench, `AIKOQL_MCP_BIN`, `go test ./internal/knowledge -run '^$' -bench BenchmarkAikoql -benchtime=1x`):
-  - upsert (create path, 4 round trips: index MATCH + remember + defensive get + index remember) ≈ **8.5ms/op**
-  - get by external ID (2 round trips: index MATCH + get) ≈ **2.1ms/op**
+  - upsert (create path) ≈ **8.5ms/op**
+  - get by external ID ≈ **2.1ms/op**
   - depth-3 directed traverse, 20-node chain ≈ **4.9ms/op**
-- [ ] 1K / 10K / 100K / 1M objects: **still unmeasured** — the stdio transport has a server-side rate limit (default 120 calls/min, error `[-32000] rate limit exceeded (max 120 calls/min)`, key `_stdio`; toml-configurable, no CLI knob in `serve --help`). The scale path is built (§32 commits 27–28): the adapter batches a mutation's writes into two `batch` calls (`BatchUpsert`; reads and the defensive type check stay per-object) and retries rate-limited calls with exponential backoff (1s→8s, context-bounded — the limit lives server-side, so a raised or disabled limit costs no sleeps; the server rejects rather than delays, dispatcher.rs). 1K-object setup ≈ 2K read calls ≈ 17+ min at the default limit; still to be measured at scale.
+  - (2026-09-29, commit 29) the external-ID lookup measured above went through a `MATCH ExternalIDIndex WHERE external_id == X` — fine on a fresh bench DB, but the dogfood ingest (~150K index objects) exposed it as a full type scan (no property index): **~600ms per lookup, O(n) and growing**. The adapter now resolves via the server's O(1) `get_by_idem` tool; the measured bench numbers are superseded, not re-run.
+- [x] 100K+ objects (dogfood, 2026-09-29): the Claude transcript ingest over `.ei/dogfood-db` crawled at ~3.3 tool calls/s — one get + one full-scan aikoql per object (~595ms per pair, measured CPU/call matches). Fixed with `get_by_idem` (Mnemosyne commit 8937a52 + EI commit 29): per-object reads drop to two O(1) calls. The remaining unmeasured scale item: 1M objects.
 - [ ] connector scale: 10 / 100 / 1000 repositories; 10K / 100K / 1M issues
 
 Do not claim scalability until measured. Currently measured: per-op latency only.
