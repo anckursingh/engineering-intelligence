@@ -83,6 +83,8 @@ type PullRequest struct {
 	BaseRef        string    `json:"base_ref"`
 	HeadRef        string    `json:"head_ref"`
 	MergeCommitSHA string    `json:"merge_commit_sha,omitempty"`
+	Additions      int       `json:"additions,omitempty"`
+	Deletions      int       `json:"deletions,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	MergedAt       time.Time `json:"merged_at,omitempty"`

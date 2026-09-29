@@ -122,6 +122,8 @@ func toPullRequest(p *gh.PullRequest, owner, repo string) ontology.PullRequest {
 		BaseRef:        p.GetBase().GetRef(),
 		HeadRef:        p.GetHead().GetRef(),
 		MergeCommitSHA: p.GetMergeCommitSHA(),
+		Additions:      p.GetAdditions(),
+		Deletions:      p.GetDeletions(),
 		CreatedAt:      ts(p.GetCreatedAt()),
 		UpdatedAt:      ts(p.GetUpdatedAt()),
 		MergedAt:       mergedAt,

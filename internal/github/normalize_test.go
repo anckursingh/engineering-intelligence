@@ -10,6 +10,7 @@ import (
 func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
 func strptr(s string) *string       { return &s }
 func int64ptr(i int64) *int64       { return &i }
+func intptr(i int) *int             { return &i }
 
 // The PR list endpoint never populates `merged` (nil in every list response);
 // merged_at is the authoritative merge signal there. Dogfood: aikoql#6 closed
@@ -31,6 +32,18 @@ func TestToPullRequestMergedFromMergedAt(t *testing.T) {
 	// Open PR: no merged_at → not merged.
 	if got := toPullRequest(&gh.PullRequest{Merged: nil}, "anckursingh", "aikoql"); got.Merged {
 		t.Fatalf("toPullRequest without merged_at: Merged = true, want false")
+	}
+}
+
+// The PR list endpoint carries additions/deletions — the PR size metric's
+// only data source (roadmap Layer A).
+func TestToPullRequestMapsDiffSize(t *testing.T) {
+	got := toPullRequest(&gh.PullRequest{
+		Additions: intptr(120),
+		Deletions: intptr(35),
+	}, "anckursingh", "aikoql")
+	if got.Additions != 120 || got.Deletions != 35 {
+		t.Fatalf("diff size = %d+/%d-, want 120+/35-", got.Additions, got.Deletions)
 	}
 }
 

@@ -63,6 +63,7 @@ var candidates = []candidate{
 	{"throughput", "Throughput", "PRs", metrics.DefThroughput, metrics.Throughput},
 	{"ai_assisted_pr_pct", "AI-assisted PR percentage", "%", metrics.DefAIAssistedPRPct, metrics.AIAssistedPRPct},
 	{"ci_pass_rate", "CI pass rate", "%", metrics.DefCIPassRate, metrics.CIPassRate},
+	{"pr_size", "PR size", "lines", metrics.DefPRSize, metrics.PRSize},
 }
 
 // limitations carry every candidate's definition limits plus the causality
@@ -75,7 +76,6 @@ var limitations = func() []string {
 	return append(out,
 		"association, not causation — no statistical inference is performed",
 		"confidence reflects the arithmetic of the comparison, not any causal link",
-		"PR size not evaluated — no diff data ingested",
 	)
 }()
 
