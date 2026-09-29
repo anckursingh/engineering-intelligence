@@ -11,6 +11,7 @@ package ingestion
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -64,23 +65,20 @@ func NewRun() *Run {
 // *PartialFailure.
 func (r *Run) Apply(ctx context.Context, store knowledge.KnowledgeStore, m Mutation) (Result, error) {
 	defer func() { r.EndedAt = time.Now().UTC() }()
-	applied := make([]knowledge.KnowledgeObject, 0, len(m.Objects))
-	for i, obj := range m.Objects {
+	objs := make([]knowledge.KnowledgeObject, len(m.Objects))
+	copy(objs, m.Objects)
+	for i := range objs {
 		// §10: the layer owns run-scoped provenance — fill, never clobber.
-		if obj.Provenance.ObservedAt.IsZero() {
-			obj.Provenance.ObservedAt = r.StartedAt
+		if objs[i].Provenance.ObservedAt.IsZero() {
+			objs[i].Provenance.ObservedAt = r.StartedAt
 		}
-		if obj.Provenance.IngestionRun == "" {
-			obj.Provenance.IngestionRun = r.ID
+		if objs[i].Provenance.IngestionRun == "" {
+			objs[i].Provenance.IngestionRun = r.ID
 		}
-		ko, err := store.Upsert(ctx, obj)
-		if err != nil {
-			return Result{Objects: applied}, &PartialFailure{
-				Element: fmt.Sprintf("object %d", i),
-				Err:     fmt.Errorf("ingestion: upsert: %w", err),
-			}
-		}
-		applied = append(applied, ko)
+	}
+	applied, err := r.applyObjects(ctx, store, objs)
+	if err != nil {
+		return Result{Objects: applied}, err
 	}
 	for i, rel := range m.Relationships {
 		if err := store.Relate(ctx, rel); err != nil {
@@ -91,4 +89,40 @@ func (r *Run) Apply(ctx context.Context, store knowledge.KnowledgeStore, m Mutat
 		}
 	}
 	return Result{Objects: applied, Relationships: len(m.Relationships)}, nil
+}
+
+// applyObjects writes the mutation's objects. Stores with a batch capability
+// get one call for the whole set; the per-object loop is the fallback. Both
+// paths share order, idempotency and first-failure semantics, so the
+// compensation contract (re-apply) is unchanged.
+func (r *Run) applyObjects(ctx context.Context, store knowledge.KnowledgeStore, objs []knowledge.KnowledgeObject) ([]knowledge.KnowledgeObject, error) {
+	if bs, ok := store.(knowledge.BatchUpserter); ok {
+		applied, err := bs.BatchUpsert(ctx, objs)
+		if err == nil {
+			return applied, nil
+		}
+		var be *knowledge.BatchError
+		if errors.As(err, &be) {
+			return applied, &PartialFailure{
+				Element: fmt.Sprintf("object %d", be.Index),
+				Err:     fmt.Errorf("ingestion: upsert: %w", be.Err),
+			}
+		}
+		return applied, &PartialFailure{
+			Element: "objects",
+			Err:     fmt.Errorf("ingestion: upsert: %w", err),
+		}
+	}
+	applied := make([]knowledge.KnowledgeObject, 0, len(objs))
+	for i, obj := range objs {
+		ko, err := store.Upsert(ctx, obj)
+		if err != nil {
+			return applied, &PartialFailure{
+				Element: fmt.Sprintf("object %d", i),
+				Err:     fmt.Errorf("ingestion: upsert: %w", err),
+			}
+		}
+		applied = append(applied, ko)
+	}
+	return applied, nil
 }

@@ -197,6 +197,7 @@ The server is the source of truth; these facts were measured against the live bi
 - no untyped KOQL exists (`MATCH *` and unknown entity names are COMPILE_ERROR) → GetByExternalID resolves via `ExternalIDIndex`.
 - relate: duplicate = no-op, bumps FROM version once.
 - traverse: UNDIRECTED, ignores the direction argument; hits carry a per-hit `direction` label relative to the query node → directed traversal is a client-side BFS of depth-1 traverses filtered by label (cycle topology verified).
+- batch: `{operations: [{op: "remember"|"relate"|"forget", ...tool args}]}` → `{results: [{op, ok, result|error}], count}`. Per-op failures do NOT stop the batch, and `$N.koid` resolves to the Nth koid-returning op's result (shifts when any op fails) — the adapter never uses `$N` references; created objects' index entries go in a second batch call with real koids (TestAikoqlBatchUpsertLive).
 - errors: NOT_FOUND + VALIDATION_ERROR (malformed koid) → ErrNotFound; everything else stays a wrapped transport error.
 
 ## AIKOQL client tests (§5 order)
@@ -233,7 +234,7 @@ Invariant: **never advance a committed checkpoint beyond data that has not been 
   - upsert (create path, 4 round trips: index MATCH + remember + defensive get + index remember) ≈ **8.5ms/op**
   - get by external ID (2 round trips: index MATCH + get) ≈ **2.1ms/op**
   - depth-3 directed traverse, 20-node chain ≈ **4.9ms/op**
-- [ ] 1K / 10K / 100K / 1M objects: **blocked** — the stdio transport has a server-side fixed rate limit of **120 calls/min** (error `[-32000] rate limit exceeded (max 120 calls/min)`, key `_stdio`; no CLI knob in `serve --help`). A 1K-object setup costs ~4K calls ≈ 33+ min. Scale path: the server's `batch` tool (adapter-side batching), or a raised server limit — do not build until a real sync needs it.
+- [ ] 1K / 10K / 100K / 1M objects: **blocked** — the stdio transport has a server-side fixed rate limit of **120 calls/min** (error `[-32000] rate limit exceeded (max 120 calls/min)`, key `_stdio`; no CLI knob in `serve --help`). The §32 deferral trigger fired for real on the first dogfood sync, so the scale path was built (§32 commit 27): the adapter batches a mutation's writes into two `batch` calls (`BatchUpsert`; reads and the defensive type check stay per-object) and the CLI paces every tool call at the server's 120/min policy (token bucket, burst = cap; `ponytail:` hardcoded — the server does not advertise its limit). 1K-object setup ≈ 2K read calls ≈ 17+ min paced; still to be measured at scale.
 - [ ] connector scale: 10 / 100 / 1000 repositories; 10K / 100K / 1M issues
 
 Do not claim scalability until measured. Currently measured: per-op latency only.

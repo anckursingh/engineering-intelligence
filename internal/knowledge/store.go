@@ -12,6 +12,7 @@ package knowledge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -69,3 +70,27 @@ type KnowledgeStore interface {
 	// Traverse walks edges of relType up to depth hops from a starting koid.
 	Traverse(ctx context.Context, from, relType string, dir Direction, depth int) ([]KnowledgeObject, error)
 }
+
+// BatchUpserter is an optional KnowledgeStore capability (§32): write every
+// object of a mutation — and the store's own bookkeeping — in as few calls
+// as the store supports. Per-object semantics (order, idempotency,
+// first-failure reporting) are identical to Upsert, so Apply prefers it when
+// present; the per-object path remains the fallback (Memory does not
+// implement it).
+type BatchUpserter interface {
+	BatchUpsert(ctx context.Context, objs []KnowledgeObject) ([]KnowledgeObject, error)
+}
+
+// BatchError names the first failed object of a BatchUpsert. Index is the
+// zero-based position in the objs slice; the objects before it are returned
+// as stored and persist (re-apply compensates, as with Upsert).
+type BatchError struct {
+	Index int
+	Err   error
+}
+
+func (b *BatchError) Error() string {
+	return fmt.Sprintf("knowledge: batch object %d: %v", b.Index, b.Err)
+}
+
+func (b *BatchError) Unwrap() error { return b.Err }

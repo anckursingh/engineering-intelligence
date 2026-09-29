@@ -6,6 +6,7 @@ package ingestion_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,29 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
 )
+
+// batchStore embeds the in-memory store and records BatchUpsert calls, so
+// Apply's batch fast path can be graded without a server. It never writes
+// through to Memory — the tests assert that fact to prove the batch path ran.
+type batchStore struct {
+	*knowledge.Memory
+	got []knowledge.KnowledgeObject
+	err error
+}
+
+func (b *batchStore) BatchUpsert(_ context.Context, objs []knowledge.KnowledgeObject) ([]knowledge.KnowledgeObject, error) {
+	b.got = objs
+	if b.err != nil {
+		return nil, b.err
+	}
+	out := make([]knowledge.KnowledgeObject, len(objs))
+	copy(out, objs)
+	for i := range out {
+		out[i].Koid = fmt.Sprintf("k%d", i)
+		out[i].Version = 1
+	}
+	return out, nil
+}
 
 func newStore(t *testing.T) knowledge.KnowledgeStore {
 	t.Helper()
@@ -226,4 +250,52 @@ func runIngestion(t *testing.T, newStore func(t *testing.T) knowledge.KnowledgeS
 			t.Errorf("connector-supplied provenance was clobbered: %+v", pre)
 		}
 	})
+}
+
+// §32: Apply must prefer a store's batch capability — one BatchUpsert call
+// for the whole mutation — and stamp run provenance before the batch write.
+func TestApplyPrefersBatchUpsert(t *testing.T) {
+	s := &batchStore{Memory: knowledge.NewMemory()}
+	run := ingestion.NewRun()
+	res, err := run.Apply(context.Background(), s, ingestion.Mutation{
+		Objects: []knowledge.KnowledgeObject{obj("ing:a", "Issue"), obj("ing:b", "Issue")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.got == nil {
+		t.Fatal("BatchUpsert not called; want Apply to prefer it over per-object Upsert")
+	}
+	if len(s.got) != 2 {
+		t.Fatalf("BatchUpsert got %d objects, want 2", len(s.got))
+	}
+	if s.got[0].Provenance.ObservedAt.IsZero() || s.got[0].Provenance.IngestionRun != run.ID {
+		t.Errorf("provenance not stamped before batch: %+v", s.got[0].Provenance)
+	}
+	if len(res.Objects) != 2 || res.Objects[0].Koid != "k0" || res.Objects[1].Koid != "k1" {
+		t.Errorf("res.Objects = %+v, want batch koids", res.Objects)
+	}
+	// The per-object fallback must not have run: the fake never writes to
+	// Memory, so a populated Memory would prove Upsert was called instead.
+	if _, err := s.Memory.GetByExternalID(context.Background(), "ing:a"); !errors.Is(err, knowledge.ErrNotFound) {
+		t.Errorf("Memory was written, want batch path only: %v", err)
+	}
+}
+
+func TestApplyBatchFailureKeepsElementSemantics(t *testing.T) {
+	s := &batchStore{Memory: knowledge.NewMemory(),
+		err: &knowledge.BatchError{Index: 1, Err: knowledge.ErrNotFound}}
+	_, err := ingestion.NewRun().Apply(context.Background(), s, ingestion.Mutation{
+		Objects: []knowledge.KnowledgeObject{obj("ing:a", "Issue"), obj("ing:b", "Issue")},
+	})
+	var pf *ingestion.PartialFailure
+	if !errors.As(err, &pf) {
+		t.Fatalf("err = %v, want PartialFailure", err)
+	}
+	if pf.Element != "object 1" {
+		t.Errorf("element = %q, want %q", pf.Element, "object 1")
+	}
+	if !errors.Is(err, knowledge.ErrNotFound) {
+		t.Errorf("err chain loses cause: %v", err)
+	}
 }

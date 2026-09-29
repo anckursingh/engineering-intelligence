@@ -403,3 +403,163 @@ func TestAikoqlIndexLookupEscapesQuotes(t *testing.T) {
 		t.Errorf("query not escaped: %s", q)
 	}
 }
+
+// §32: BatchUpsert collapses a mutation's writes into two batch calls
+// (object remembers, then index remembers for created objects) with the
+// per-object read phase and defensive checks unchanged.
+func TestAikoqlBatchUpsertWire(t *testing.T) {
+	// A: absent → create. B: present, identical → skip. C: present, changed → update.
+	f := &fakeDB{script: []fakeCall{
+		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}}, // A lookup
+		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []map[string]any{{
+			"koid": "kb", "type_name": "Issue", "version": 1,
+			"properties": map[string]any{"koid": "kb", "type_name": "Issue", "n": float64(2)},
+		}}})}, // B lookup
+		{tool: "get", out: rawJSON(t, map[string]any{
+			"koid": "kb", "version": 1, "type_name": "Issue",
+			"properties": map[string]any{"n": float64(2)},
+		})},
+		{tool: "aikoql", out: rawJSON(t, map[string]any{"results": []map[string]any{{
+			"koid": "kc", "type_name": "Issue", "version": 3,
+			"properties": map[string]any{"koid": "kc", "type_name": "Issue", "n": float64(0)},
+		}}})}, // C lookup
+		{tool: "get", out: rawJSON(t, map[string]any{
+			"koid": "kc", "version": 3, "type_name": "Issue",
+			"properties": map[string]any{"n": float64(0)},
+		})},
+		// Batch 1: object writes — create A, update C (B skipped).
+		{tool: "batch", out: rawJSON(t, map[string]any{"results": []map[string]any{
+			{"op": "remember", "ok": true, "result": map[string]any{"koid": "ka", "version": 1, "commit_ts": 1}},
+			{"op": "remember", "ok": true, "result": map[string]any{"koid": "kc", "version": 4, "commit_ts": 2}},
+		}})},
+		// Defensive type check on created A (wire contract: global key index
+		// is type-blind, a cross-type silent return must not be trusted).
+		{tool: "get", out: rawJSON(t, map[string]any{
+			"koid": "ka", "version": 1, "type_name": "Issue",
+			"properties": map[string]any{"external_id": "a", "n": float64(1)},
+		})},
+		// Batch 2: index writes for created objects only.
+		{tool: "batch", out: rawJSON(t, map[string]any{"results": []map[string]any{
+			{"op": "remember", "ok": true, "result": map[string]any{"koid": "kidx", "version": 1, "commit_ts": 3}},
+		}})},
+	}}
+	s := knowledge.NewAikoql(f)
+	got, err := s.BatchUpsert(context.Background(), []knowledge.KnowledgeObject{
+		{TypeName: "Issue", ExternalID: "a", Properties: map[string]any{"n": float64(1)}},
+		{TypeName: "Issue", ExternalID: "b", Properties: map[string]any{"n": float64(2)}},
+		{TypeName: "Issue", ExternalID: "c", Properties: map[string]any{"n": float64(9)}},
+	})
+	if err != nil {
+		t.Fatalf("BatchUpsert: %v", err)
+	}
+	if got[0].Koid != "ka" || got[0].Version != 1 {
+		t.Errorf("got[0] = %+v, want create result koid ka", got[0])
+	}
+	if got[1].Koid != "kb" || got[1].Version != 1 {
+		t.Errorf("got[1] = %+v, want unchanged object as stored", got[1])
+	}
+	if got[2].Koid != "kc" || got[2].Version != 4 {
+		t.Errorf("got[2] = %+v, want update result version 4", got[2])
+	}
+	if len(f.calls) != 8 {
+		t.Fatalf("calls = %d, want 8 (4 reads + defensive get + 2 batches)", len(f.calls))
+	}
+	b1, _ := f.calls[5].args["operations"].([]map[string]any)
+	if len(b1) != 2 {
+		t.Fatalf("batch 1 ops = %+v, want 2", b1)
+	}
+	op0 := b1[0]
+	if op0["op"] != "remember" || op0["type_name"] != "Issue" || op0["idempotency_key"] != "a" {
+		t.Errorf("create op = %+v", op0)
+	}
+	if _, hasKoid := op0["koid"]; hasKoid {
+		t.Errorf("create op must not carry koid: %+v", op0)
+	}
+	op1 := b1[1]
+	if op1["koid"] != "kc" || op1["expected_version"] != uint64(3) {
+		t.Errorf("update op = %+v, want koid kc + expected_version 3", op1)
+	}
+	b2, _ := f.calls[7].args["operations"].([]map[string]any)
+	if len(b2) != 1 {
+		t.Fatalf("batch 2 ops = %+v, want 1 index write", b2)
+	}
+	idx := b2[0]
+	if idx["type_name"] != idxType || idx["idempotency_key"] != "idx:a" {
+		t.Errorf("index op = %+v", idx)
+	}
+	ip, _ := idx["properties"].(map[string]any)
+	if ip["koid"] != "ka" || ip["type_name"] != "Issue" {
+		t.Errorf("index properties = %+v, want created object koid", ip)
+	}
+}
+
+func TestAikoqlBatchUpsertReportsFirstFailedObject(t *testing.T) {
+	f := &fakeDB{script: []fakeCall{
+		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}},
+		{tool: "aikoql", err: &aikoql.McpError{Code: "COMPILE_ERROR", Message: "unknown type"}},
+		{tool: "batch", out: rawJSON(t, map[string]any{"results": []map[string]any{
+			{"op": "remember", "ok": false, "error": "boom"},
+			{"op": "remember", "ok": true, "result": map[string]any{"koid": "kb", "version": 1, "commit_ts": 1}},
+		}})},
+	}}
+	s := knowledge.NewAikoql(f)
+	_, err := s.BatchUpsert(context.Background(), []knowledge.KnowledgeObject{
+		{TypeName: "Issue", ExternalID: "a"},
+		{TypeName: "Issue", ExternalID: "b"},
+	})
+	var be *knowledge.BatchError
+	if !errors.As(err, &be) {
+		t.Fatalf("err = %v, want BatchError", err)
+	}
+	if be.Index != 0 {
+		t.Errorf("index = %d, want 0", be.Index)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("err = %v, want server error text", err)
+	}
+}
+
+func TestAikoqlBatchUpsertLive(t *testing.T) {
+	s, ok := aikoqltest.Live(t).(*knowledge.AikoqlStore)
+	if !ok {
+		t.Fatal("aikoqltest.Live is not *AikoqlStore")
+	}
+	ctx := context.Background()
+	prov := knowledge.Provenance{Source: "test", ObservedAt: time.Now()}
+	mk := func(ext string, n float64) knowledge.KnowledgeObject {
+		return knowledge.KnowledgeObject{TypeName: "Issue", ExternalID: ext,
+			Properties: map[string]any{"n": n}, Provenance: prov}
+	}
+	first, err := s.BatchUpsert(ctx, []knowledge.KnowledgeObject{mk("b:1", 1), mk("b:2", 2), mk("b:3", 3)})
+	if err != nil {
+		t.Fatalf("BatchUpsert: %v", err)
+	}
+	for i, ext := range []string{"b:1", "b:2", "b:3"} {
+		got, err := s.GetByExternalID(ctx, ext)
+		if err != nil {
+			t.Fatalf("GetByExternalID(%s): %v", ext, err)
+		}
+		if got.Koid != first[i].Koid {
+			t.Errorf("koid mismatch for %s: %s vs %s", ext, got.Koid, first[i].Koid)
+		}
+	}
+	// Identical re-apply: no writes, versions stable.
+	again, err := s.BatchUpsert(ctx, []knowledge.KnowledgeObject{mk("b:1", 1), mk("b:2", 2)})
+	if err != nil {
+		t.Fatalf("identical re-apply: %v", err)
+	}
+	if again[0].Version != first[0].Version || again[1].Version != first[1].Version {
+		t.Errorf("identical re-apply bumped versions: %+v -> %+v", first, again)
+	}
+	// Changed payload: exactly the changed object bumps.
+	changed, err := s.BatchUpsert(ctx, []knowledge.KnowledgeObject{mk("b:1", 10), mk("b:2", 2)})
+	if err != nil {
+		t.Fatalf("changed re-apply: %v", err)
+	}
+	if changed[0].Version != first[0].Version+1 {
+		t.Errorf("b:1 version = %d, want %d", changed[0].Version, first[0].Version+1)
+	}
+	if changed[1].Version != first[1].Version {
+		t.Errorf("b:2 version bumped on identical payload: %d", changed[1].Version)
+	}
+}

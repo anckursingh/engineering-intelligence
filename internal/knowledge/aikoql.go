@@ -21,6 +21,12 @@
 //     depth-1 traverses filtered by label (verified on a cycle topology).
 //   - errors: NOT_FOUND and VALIDATION_ERROR (malformed koid) both mean
 //     "no such object"; VERSION_CONFLICT = stale expected_version.
+//   - batch{operations}: each op is {"op": "remember"|"relate"|"forget", ...
+//     tool args}; returns {"results": [{op, ok, result|error}]}. Per-op
+//     failures do NOT stop the batch, and "$N.koid" resolves to the Nth
+//     koid-returning op's result (shifts when an op fails), so the adapter
+//     never uses $N references — created objects' index entries are written
+//     in a second batch call with real koids.
 package knowledge
 
 import (
@@ -137,6 +143,152 @@ func (s *AikoqlStore) update(ctx context.Context, obj, cur KnowledgeObject) (Kno
 	obj.Koid = cur.Koid
 	obj.Version = int64(out.Version)
 	return obj, nil
+}
+
+// pendingObj is one object of a BatchUpsert waiting on its write.
+type pendingObj struct {
+	obj     KnowledgeObject
+	op      map[string]any // batch op (object remember)
+	create  bool           // create vs update
+	curKoid string         // set when !create
+	slot    int            // input position in the BatchUpsert call
+}
+
+// BatchUpsert writes all objects with two batch calls: object remembers
+// first, then index remembers for created objects. The per-object read
+// phase (index lookup, change comparison, defensive type check) is
+// unchanged from Upsert; results come back in input order.
+//
+// ponytail: relationships are not batched — they would need the server's
+// $N.koid references, which shift when any op fails. Batch them if a
+// connector ever emits relationship-heavy mutations.
+func (s *AikoqlStore) BatchUpsert(ctx context.Context, objs []KnowledgeObject) ([]KnowledgeObject, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var pend []pendingObj
+	results := make([]KnowledgeObject, len(objs))
+	for i, obj := range objs {
+		entry, err := s.indexGet(ctx, obj.ExternalID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return results[:i], &BatchError{Index: i, Err: err}
+		}
+		switch {
+		case err == nil:
+			if entry.TypeName != obj.TypeName {
+				return results[:i], &BatchError{Index: i, Err: fmt.Errorf("%w: external_id %q belongs to %s", ErrTypeConflict, obj.ExternalID, entry.TypeName)}
+			}
+			cur, err := s.Get(ctx, entry.KOID)
+			if err != nil {
+				return results[:i], &BatchError{Index: i, Err: err}
+			}
+			if sameProps(cur.Properties, obj.Properties) {
+				results[i] = cur // identical: no write
+				continue
+			}
+			props, err := objProps(obj)
+			if err != nil {
+				return results[:i], &BatchError{Index: i, Err: err}
+			}
+			v := uint64(cur.Version)
+			pend = append(pend, pendingObj{obj: obj, curKoid: cur.Koid, slot: i, op: map[string]any{
+				"op": "remember", "type_name": obj.TypeName, "koid": cur.Koid,
+				"expected_version": v, "properties": props,
+			}})
+		default: // ErrNotFound: create
+			props, err := objProps(obj)
+			if err != nil {
+				return results[:i], &BatchError{Index: i, Err: err}
+			}
+			pend = append(pend, pendingObj{obj: obj, create: true, slot: i, op: map[string]any{
+				"op": "remember", "type_name": obj.TypeName,
+				"idempotency_key": obj.ExternalID, "properties": props,
+			}})
+		}
+	}
+	if len(pend) == 0 {
+		return results, nil
+	}
+	ops := make([]map[string]any, len(pend))
+	for i, p := range pend {
+		ops[i] = p.op
+	}
+	res, err := s.batch(ctx, ops)
+	if err != nil {
+		return nil, err
+	}
+	var idxOps []map[string]any
+	for j, r := range res {
+		p := pend[j]
+		if !r.OK {
+			return results[:p.slot], &BatchError{Index: p.slot, Err: fmt.Errorf("aikoql remember: %s", r.Error)}
+		}
+		if !p.create {
+			p.obj.Koid = p.curKoid
+			p.obj.Version = int64(r.Result.Version)
+			results[p.slot] = p.obj
+			continue
+		}
+		// Defensive: a key reused by another type is a silent no-op
+		// server-side — verify the returned object really is ours.
+		got, err := s.getWire(ctx, r.Result.KOID)
+		if err != nil {
+			return results[:p.slot], &BatchError{Index: p.slot, Err: err}
+		}
+		if got.TypeName != p.obj.TypeName {
+			return results[:p.slot], &BatchError{Index: p.slot, Err: fmt.Errorf("%w: external_id %q belongs to %s", ErrTypeConflict, p.obj.ExternalID, got.TypeName)}
+		}
+		ko, err := wireToKO(got)
+		if err != nil {
+			return results[:p.slot], &BatchError{Index: p.slot, Err: err}
+		}
+		results[p.slot] = ko
+		// Index entry, written after the object so a crash only orphans an
+		// entry (self-healed by the next create via the defensive check).
+		idxOps = append(idxOps, map[string]any{
+			"op": "remember", "type_name": idxType, "idempotency_key": idxKey(p.obj.ExternalID),
+			"properties": map[string]any{
+				externalIDKey: p.obj.ExternalID,
+				"koid":        r.Result.KOID,
+				"type_name":   p.obj.TypeName,
+			},
+		})
+	}
+	if len(idxOps) > 0 {
+		res2, err := s.batch(ctx, idxOps)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range res2 {
+			if !r.OK {
+				// The objects themselves are stored; a failed index write
+				// self-heals on re-apply, so this is a whole-call error.
+				return results, fmt.Errorf("aikoql batch index writes: %s", r.Error)
+			}
+		}
+	}
+	return results, nil
+}
+
+type batchOpResult struct {
+	Op     string         `json:"op"`
+	OK     bool           `json:"ok"`
+	Result rememberedWire `json:"result"`
+	Error  string         `json:"error"`
+}
+
+func (s *AikoqlStore) batch(ctx context.Context, ops []map[string]any) ([]batchOpResult, error) {
+	raw, err := s.db.CallTool(ctx, "batch", map[string]any{"operations": ops})
+	if err != nil {
+		return nil, mapErr("batch", err)
+	}
+	var res struct {
+		Results []batchOpResult `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("aikoql batch payload: %w", err)
+	}
+	return res.Results, nil
 }
 
 func (s *AikoqlStore) remember(ctx context.Context, typeName, key, koid string, expected *uint64, props map[string]any) (*rememberedWire, error) {
