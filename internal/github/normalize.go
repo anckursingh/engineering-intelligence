@@ -108,20 +108,23 @@ func toCommit(c *gh.RepositoryCommit, owner, repo string) ontology.Commit {
 }
 
 func toPullRequest(p *gh.PullRequest, owner, repo string) ontology.PullRequest {
+	mergedAt := ts(p.GetMergedAt())
 	return ontology.PullRequest{
-		Repository:     repoRef(owner, repo),
-		Number:         p.GetNumber(),
-		Title:          p.GetTitle(),
-		Body:           p.GetBody(),
-		State:          p.GetState(),
-		Merged:         p.GetMerged(),
+		Repository: repoRef(owner, repo),
+		Number:     p.GetNumber(),
+		Title:      p.GetTitle(),
+		Body:       p.GetBody(),
+		State:      p.GetState(),
+		// The list endpoint leaves `merged` nil; merged_at presence is the
+		// authoritative merge signal (dogfood: merged PRs stored as false).
+		Merged:         p.GetMerged() || !mergedAt.IsZero(),
 		AuthorLogin:    p.GetUser().GetLogin(),
 		BaseRef:        p.GetBase().GetRef(),
 		HeadRef:        p.GetHead().GetRef(),
 		MergeCommitSHA: p.GetMergeCommitSHA(),
 		CreatedAt:      ts(p.GetCreatedAt()),
 		UpdatedAt:      ts(p.GetUpdatedAt()),
-		MergedAt:       ts(p.GetMergedAt()),
+		MergedAt:       mergedAt,
 	}
 }
 
