@@ -5,6 +5,7 @@ package intelligence
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -243,5 +244,81 @@ func TestInvestigateQuestionDispatch(t *testing.T) {
 	}
 	if !strings.Contains(got.Statement, "CI pass rate decreased from 75.0 to 25.0 %.") {
 		t.Errorf("statement = %q, want the CI pass rate primary", got.Statement)
+	}
+}
+
+// TestAPIComparisonsEndpoint (Milestone F, item 45): POST /comparisons
+// partitions the window's merged PRs by AI attribution and compares the
+// PR-scoped metrics between the two populations.
+func TestAPIComparisonsEndpoint(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	prKOs := map[int]knowledge.KnowledgeObject{}
+	for i, cycle := range []int{2, 4, 3, 6} {
+		num := i + 1
+		created := base.Add(time.Duration(i+1) * 24 * time.Hour)
+		prKO := upsert(t, store, mapKO(t, ontology.PullRequest{
+			Repository: "acme/widgets", Number: num, Merged: true,
+			CreatedAt: created, MergedAt: created.Add(time.Duration(cycle) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: prKO.Koid, To: repo.Koid})
+		prKOs[num] = prKO
+	}
+	for _, num := range []int{1, 3} { // reviews only on the unattributed PRs
+		revKO := upsert(t, store, mapKO(t, ontology.Review{
+			Repository: "acme/widgets", PRNumber: num, ID: int64(100 + num),
+			SubmittedAt: base.Add(time.Duration(num+1) * 24 * time.Hour),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsReview), From: prKOs[num].Koid, To: revKO.Koid})
+	}
+	for _, num := range []int{2, 4} { // AI contributions on the assisted PRs
+		cKO := upsert(t, store, mapKO(t, ontology.CodeContribution{
+			Repository: "acme/widgets", PRNumber: num,
+			ID: fmt.Sprintf("toolu_c%d", num), Source: "claude-code",
+			Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: cKO.Koid, To: prKOs[num].Koid})
+	}
+
+	api := NewAPI(store)
+	body := `{"scope":"github.com:org:acme","start":"2026-09-01T00:00:00Z","end":"2026-10-01T00:00:00Z"}`
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/comparisons", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /comparisons = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Populations []struct {
+			ID        string `json:"id"`
+			Label     string `json:"label"`
+			MergedPRs int    `json:"merged_prs"`
+		} `json:"populations"`
+		Metrics []PopulationComparison `json:"metrics"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Populations) != 2 || got.Populations[0].ID != "ai_assisted" || got.Populations[0].MergedPRs != 2 ||
+		got.Populations[1].ID != "unattributed" || got.Populations[1].MergedPRs != 2 {
+		t.Errorf("populations = %+v, want ai_assisted 2 + unattributed 2", got.Populations)
+	}
+	if len(got.Metrics) < 1 || got.Metrics[0].Metric != "cycle_time" {
+		t.Fatalf("metrics = %+v, want cycle_time first", got.Metrics)
+	}
+	if got.Metrics[0].Assisted == nil || got.Metrics[0].Assisted.Value != 5.0 ||
+		got.Metrics[0].Unattributed == nil || got.Metrics[0].Unattributed.Value != 2.5 {
+		t.Errorf("cycle_time = %+v vs %+v, want 5.0 vs 2.5", got.Metrics[0].Assisted, got.Metrics[0].Unattributed)
+	}
+
+	// Bad window → 400.
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/comparisons", strings.NewReader(`{"scope":"github.com:org:acme","start":"nope","end":"2026-10-01T00:00:00Z"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /comparisons bad start = %d, want 400", rec.Code)
 	}
 }

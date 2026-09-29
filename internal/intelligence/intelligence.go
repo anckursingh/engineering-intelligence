@@ -98,20 +98,23 @@ var limitations = func() []string {
 	)
 }()
 
+// candidateByName resolves a metric name to its candidate.
+func candidateByName(name string) (candidate, bool) {
+	for _, c := range candidates {
+		if c.name == name {
+			return c, true
+		}
+	}
+	return candidate{}, false
+}
+
 // MetricChange compares one primary metric between two windows and reports
 // which other metrics moved alongside it (§22-23, Milestone F): the engine
 // behind every supported question. Uncomputable factors are reported
 // honestly (appeared/disappeared) or skipped (unchanged) — never fabricated,
 // never causal, and the primary never doubles as its own factor.
 func MetricChange(pop metrics.Population, a, b Window, primaryName, question string) Investigation {
-	var primary candidate
-	found := false
-	for _, c := range candidates {
-		if c.name == primaryName {
-			primary, found = c, true
-			break
-		}
-	}
+	primary, found := candidateByName(primaryName)
 	if !found {
 		return concluded(question, fmt.Sprintf("Unknown metric %s.", primaryName))
 	}

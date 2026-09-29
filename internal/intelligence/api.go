@@ -1,13 +1,14 @@
 // api.go is the §24 HTTP surface over a KnowledgeStore: structured evidence,
 // not only prose. Endpoints: GET /health, GET /metrics, GET /metrics/{metric},
-// POST /investigations, GET /investigations/{id}, GET /board (§28),
-// POST /ask (§29).
+// POST /investigations, GET /investigations/{id}, POST /comparisons
+// (Milestone F), GET /board (§28), POST /ask (§29).
 // Investigations are deterministic and cheap, so results live in memory —
 // ponytail: persist them when a client that restarts servers exists.
 package intelligence
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -89,6 +90,7 @@ func NewAPI(store knowledge.KnowledgeStore) *API {
 	mux.HandleFunc("GET /metrics/{metric}", a.handleMetric)
 	mux.HandleFunc("POST /investigations", a.handleInvestigate)
 	mux.HandleFunc("GET /investigations/{id}", a.handleGetInvestigation)
+	mux.HandleFunc("POST /comparisons", a.handleComparisons)
 	mux.HandleFunc("GET /board", a.handleBoard)
 	mux.HandleFunc("POST /ask", a.handleAsk)
 	mux.HandleFunc("GET /{$}", a.handleDashboard)
@@ -195,6 +197,70 @@ func (a *API) handleGetInvestigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// comparisonPopulation is one population side of a comparison request.
+type comparisonPopulation struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	MergedPRs int    `json:"merged_prs"`
+}
+
+// handleComparisons serves POST /comparisons (Milestone F, item 45): one
+// window's merged PRs compared between the AI-assisted and unattributed
+// populations, per PR-scoped metric.
+func (a *API) handleComparisons(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scope string `json:"scope"`
+		Start string `json:"start"` // RFC3339
+		End   string `json:"end"`   // RFC3339
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Scope == "" {
+		writeErr(w, http.StatusBadRequest, "scope required")
+		return
+	}
+	start, err := time.Parse(time.RFC3339, req.Start)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "start must be RFC3339")
+		return
+	}
+	end, err := time.Parse(time.RFC3339, req.End)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "end must be RFC3339")
+		return
+	}
+	if !end.After(start) {
+		writeErr(w, http.StatusBadRequest, "end must be after start")
+		return
+	}
+	pop, err := Population(r.Context(), a.store, req.Scope)
+	if err != nil {
+		if errors.Is(err, knowledge.ErrNotFound) {
+			writeErr(w, http.StatusBadRequest, "unknown scope")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	assisted, plain, rows := ComparePopulations(pop, metrics.Window{Start: start, End: end})
+	writeJSON(w, http.StatusOK, struct {
+		Scope       string                 `json:"scope"`
+		Start       string                 `json:"start"`
+		End         string                 `json:"end"`
+		Populations []comparisonPopulation `json:"populations"`
+		Metrics     []PopulationComparison `json:"metrics"`
+	}{
+		Scope: req.Scope, Start: req.Start, End: req.End,
+		Populations: []comparisonPopulation{
+			{ID: "ai_assisted", Label: "AI-assisted PRs", MergedPRs: assisted},
+			{ID: "unattributed", Label: "PRs without AI attribution", MergedPRs: plain},
+		},
+		Metrics: rows,
+	})
 }
 
 func (a *API) record(inv Investigation, windowB string) InvestigationResult {

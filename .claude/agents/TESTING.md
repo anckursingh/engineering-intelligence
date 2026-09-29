@@ -388,3 +388,10 @@ All applicable rows true before "done":
 - Classification (agent.go): a topic phrase ("cycle time" | "ci quality" | "ai adoption" | "review latency") plus a change word (or why-prefix) routes to the matching engine class; anything else is the honest refusal, which now lists all four supported questions ("I can only answer: ...; ..."). `askChange` is the single ask path (previous/current derived windows → MetricChange).
 - POST /investigations dispatches on the question field (`questionPrimary`); omitted question keeps the §23 default (cycle time), unknown → 400 "unsupported question".
 - Tests: `TestMetricChangeCIQuality` pins the CI statement (75.0 → 25.0 %, factors cycle time + review latency + throughput, primary never a factor) and `TestMetricChangeMissingData` the named-metric honesty; `TestAskCIDispatch` (classification + dispatch + evidence resolution over seedAgentCIWorld); `TestAskClassification` now covers all four classes; `TestInvestigateQuestionDispatch` pins the API's question → primary dispatch. All §23 pins hold unchanged — delegation is behavior-preserving.
+
+## Population comparison (item 45, post-contract — roadmap Milestone F)
+
+- `ComparePopulations(pop, win) (assisted, unattributed int, rows []PopulationComparison)`: one window's merged PRs partition by AI attribution (CodeContribution names repository + PR number), reviews follow their PRs, and the PR-scoped metrics (cycle_time, review_latency, pr_size, review_cycles) compare between the sub-populations. A nil side is an honest gap (a metric not computable on that side), a metric absent on both sides drops the row entirely.
+- POST /comparisons {scope,start,end} returns populations (id/label/merged_prs) + metric rows (metric/label/unit + `ai_assisted`/`unattributed` ComparisonValues with CALCULATED state and evidence); bad window or unknown scope → 400.
+- Honest-partition gotcha: a side's PRs carrying no reviews at all makes review_latency/review_cycles absent there — silence, never a fake zero (item 35's contract, now pinned cross-sectionally).
+- Tests: `TestComparePopulationsPartitionsAI`, `TestComparePopulationsUnattributedAbsent`, `TestAPIComparisonsEndpoint`.
