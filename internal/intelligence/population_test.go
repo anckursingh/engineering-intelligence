@@ -157,6 +157,17 @@ func TestPopulationCollectsTelemetry(t *testing.T) {
 		t.Fatalf("population = %d interactions, %d runs, %d tasks, %d contributions; want 1/1/2/1",
 			len(pop.Interactions), len(pop.AgentRuns), len(pop.AgentTasks), len(pop.CodeContributions))
 	}
+	// TaskSessions records the session every collected task belongs to
+	// (item 46): t1 through the AUTHORED path, t2 as the session's other
+	// child — both map to s1.
+	if len(pop.TaskSessions) != 2 {
+		t.Fatalf("TaskSessions = %d entries, want 2", len(pop.TaskSessions))
+	}
+	for _, id := range []string{"ei.com:agent-task:claude-code:t1", "ei.com:agent-task:claude-code:t2"} {
+		if got := pop.TaskSessions[id]; got != "ei.com:coding-session:claude-code:s1" {
+			t.Errorf("TaskSessions[%s] = %q, want the s1 session", id, got)
+		}
+	}
 }
 
 // TestPopulationFromUserScope: a user account scope root walks exactly like

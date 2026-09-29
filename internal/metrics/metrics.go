@@ -33,6 +33,9 @@ type Population struct {
 	AgentRuns         []Entity[ontology.AgentRun]
 	AgentTasks        []Entity[ontology.AgentTask]
 	Interactions      []Entity[ontology.Interaction]
+	// TaskSessions pairs each AgentTask external ID with its containing
+	// coding session — the location axis of the task-failure report.
+	TaskSessions map[string]string
 }
 
 // Definition declares a metric per §16. The computation is a typed function;

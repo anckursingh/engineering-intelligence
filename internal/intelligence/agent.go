@@ -51,11 +51,14 @@ var classQuestions = map[string]string{
 }
 
 // supportedQuestions renders the refusal list, in declaration order.
-var supportedQuestions = []string{QuestionCycleTime, QuestionCIQuality, QuestionAIAdoption, QuestionReviewLatency}
+var supportedQuestions = []string{QuestionCycleTime, QuestionCIQuality, QuestionAIAdoption, QuestionReviewLatency, QuestionTaskFailures}
 
 // Ask classifies the question and runs the matching engine.
 func Ask(ctx context.Context, store knowledge.KnowledgeStore, q Query) (Answer, error) {
 	class := classify(q.Text)
+	if class == "task_failures" {
+		return askTaskFailures(ctx, store, q)
+	}
 	if question, ok := classQuestions[class]; ok {
 		return askChange(ctx, store, q, class, question)
 	}
@@ -74,6 +77,8 @@ func classify(text string) string {
 	norm := strings.ToLower(text)
 	change := hasChangeWord(norm) || strings.HasPrefix(strings.TrimSpace(norm), "why")
 	switch {
+	case strings.Contains(norm, "task") && strings.Contains(norm, "fail"):
+		return "task_failures"
 	case change && strings.Contains(norm, "cycle time"):
 		return "cycle_time_change"
 	case change && strings.Contains(norm, "ci quality"):
@@ -124,6 +129,42 @@ func askChange(ctx context.Context, store knowledge.KnowledgeStore, q Query, cla
 		Statement:   inv.Statement,
 		Evidence:    ev,
 		Limitations: inv.Limitations,
+	}, nil
+}
+
+// askTaskFailures answers the task-failure question over the given period:
+// failed finished tasks grouped by session, with one evidence entry per
+// failed task and per containing session.
+func askTaskFailures(ctx context.Context, store knowledge.KnowledgeStore, q Query) (Answer, error) {
+	pop, err := Population(ctx, store, q.Scope)
+	if err != nil {
+		return Answer{}, err
+	}
+	win := metrics.Window{Start: q.From, End: q.To}
+	rows := TaskFailures(pop, win)
+	seenTask := map[string]bool{}
+	seenSession := map[string]bool{}
+	var ev []evidence.Evidence
+	for _, t := range pop.AgentTasks {
+		if t.Value.Status != "failed" || t.Value.CompletedAt.IsZero() ||
+			t.Value.CompletedAt.Before(win.Start) || !t.Value.CompletedAt.Before(win.End) {
+			continue
+		}
+		if !seenTask[t.ExternalID] {
+			seenTask[t.ExternalID] = true
+			ev = append(ev, evidence.Evidence{Type: "AgentTask", ObjectIDs: []string{t.ExternalID}, ObservedAt: t.Value.CompletedAt, State: evidence.StateObserved})
+		}
+		if s := pop.TaskSessions[t.ExternalID]; s != "" && !seenSession[s] {
+			seenSession[s] = true
+			ev = append(ev, evidence.Evidence{Type: "CodingSession", ObjectIDs: []string{s}, State: evidence.StateObserved})
+		}
+	}
+	return Answer{
+		Question:    q.Text,
+		Class:       "task_failures",
+		Statement:   taskFailuresStatement(rows),
+		Evidence:    ev,
+		Limitations: taskLimitations,
 	}, nil
 }
 

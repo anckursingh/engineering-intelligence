@@ -107,6 +107,8 @@ func TestAskClassification(t *testing.T) {
 		"What changed after AI adoption increased?":         "ai_adoption_change",
 		"What is associated with increased review latency?": "review_latency_change",
 		"did review latency change?":                        "review_latency_change",
+		"Where are agent tasks failing?":                    "task_failures",
+		"which tasks failed?":                               "task_failures",
 	}
 	for text, want := range cases {
 		ans, err := Ask(context.Background(), store, agentQuery(text))
@@ -235,6 +237,63 @@ func TestAskCIDispatch(t *testing.T) {
 				t.Errorf("cited object %s does not exist in the store: %v — fabricated evidence", id, err)
 			}
 		}
+	}
+	if len(ans.Limitations) == 0 {
+		t.Error("limitations missing")
+	}
+}
+
+// TestAskTaskFailures (Milestone F, item 46): "Where are agent tasks
+// failing?" reports the window's failed tasks grouped by session, with
+// evidence citing the task and session objects themselves.
+func TestAskTaskFailures(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	sep := func(day int) time.Time { return time.Date(2026, 9, day, 0, 0, 0, 0, time.UTC) }
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	pr := upsert(t, store, mapKO(t, ontology.PullRequest{
+		Repository: "acme/widgets", Number: 1, Merged: true, CreatedAt: sep(1), MergedAt: sep(5),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: pr.Koid, To: repo.Koid})
+
+	session := upsert(t, store, mapKO(t, ontology.CodingSession{Source: "claude-code", SessionID: "s1", StartedAt: sep(1)}.KnowledgeObject, prov))
+	task := upsert(t, store, mapKO(t, ontology.AgentTask{Source: "claude-code", ID: "toolu_1", Status: "failed", CompletedAt: sep(3)}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: task.Koid})
+	contrib := upsert(t, store, mapKO(t, ontology.CodeContribution{
+		Source: "claude-code", ID: "c1", Repository: "acme/widgets", PRNumber: 1,
+		Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contrib.Koid, To: pr.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAuthored), From: task.Koid, To: contrib.Koid})
+
+	ans, err := Ask(context.Background(), store, agentQuery("Where are agent tasks failing?"))
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if ans.Class != "task_failures" {
+		t.Errorf("class = %q, want task_failures", ans.Class)
+	}
+	want := "1 agent task failed in the period across 1 session: " +
+		"ei.com:coding-session:claude-code:s1: 1 (ei.com:agent-task:claude-code:toolu_1)."
+	if ans.Statement != want {
+		t.Errorf("statement = %q\nwant       %q", ans.Statement, want)
+	}
+	if len(ans.Evidence) != 2 {
+		t.Fatalf("evidence = %d entries, want 2 (one task, one session)", len(ans.Evidence))
+	}
+	types := map[string]bool{}
+	for _, ev := range ans.Evidence {
+		types[ev.Type] = true
+		for _, id := range ev.ObjectIDs {
+			if _, err := store.GetByExternalID(context.Background(), id); err != nil {
+				t.Errorf("cited object %s does not exist in the store: %v — fabricated evidence", id, err)
+			}
+		}
+	}
+	if !types["AgentTask"] || !types["CodingSession"] {
+		t.Errorf("evidence types = %v, want AgentTask + CodingSession", types)
 	}
 	if len(ans.Limitations) == 0 {
 		t.Error("limitations missing")

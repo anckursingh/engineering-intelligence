@@ -98,7 +98,7 @@ func Population(ctx context.Context, store knowledge.KnowledgeStore, scope strin
 						if err := collectTelemetry[ontology.AgentRun](ctx, store, sko.Koid, ontology.RelContainsRun, "AgentRun", &pop.AgentRuns); err != nil {
 							return pop, err
 						}
-						if err := collectTelemetry[ontology.AgentTask](ctx, store, sko.Koid, ontology.RelContainsTask, "AgentTask", &pop.AgentTasks); err != nil {
+						if err := collectSessionTasks(ctx, store, sko, &pop); err != nil {
 							return pop, err
 						}
 					}
@@ -121,6 +121,32 @@ func convert[T any](ko knowledge.KnowledgeObject) (T, error) {
 		return v, err
 	}
 	return v, nil
+}
+
+// collectSessionTasks walks the session's CONTAINS_TASK children and records
+// each task plus its containing session — the pairing the task-failure
+// report (item 46) groups by. collectTelemetry cannot: only tasks carry a
+// location.
+func collectSessionTasks(ctx context.Context, store knowledge.KnowledgeStore, session knowledge.KnowledgeObject, pop *metrics.Population) error {
+	kos, err := store.Traverse(ctx, session.Koid, string(ontology.RelContainsTask), knowledge.Outbound, 1)
+	if err != nil {
+		return fmt.Errorf("intelligence: traverse tasks of %s: %w", session.ExternalID, err)
+	}
+	for _, ko := range kos {
+		if ko.TypeName != "AgentTask" {
+			continue
+		}
+		v, err := convert[ontology.AgentTask](ko)
+		if err != nil {
+			return fmt.Errorf("intelligence: decode AgentTask %s: %w", ko.ExternalID, err)
+		}
+		if pop.TaskSessions == nil {
+			pop.TaskSessions = map[string]string{}
+		}
+		pop.TaskSessions[ko.ExternalID] = session.ExternalID
+		pop.AgentTasks = append(pop.AgentTasks, metrics.Entity[ontology.AgentTask]{ExternalID: ko.ExternalID, Value: v})
+	}
+	return nil
 }
 
 // collectTelemetry walks one containment edge from the session and appends
