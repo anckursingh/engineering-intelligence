@@ -211,6 +211,68 @@ func TestSyncPRCommits(t *testing.T) {
 		"github.com:user:ann")
 }
 
+// Roadmap Milestone C: deployments ingest as Deployment objects with the
+// repo-scoped environment as Service (Deployment AFFECTS Service), and each
+// build whose head sha is the deployed sha gets Build PRODUCED Deployment —
+// sha association, the strongest link GitHub exposes (deployments created by
+// Actions carry no run id). A deployment whose build predates the sync window
+// links through the store on a later run; a sha with no build leaves no edge.
+func TestSyncDeployments(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddBuilds()
+	w.AddDeployments()
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Deployment"]; got != (github.Count{New: 2}) {
+		t.Errorf("Deployment count = %+v, want 2 new", got)
+	}
+	if got := res.Counts["Service"]; got != (github.Count{New: 2}) {
+		t.Errorf("Service count = %+v, want 2 new (production + staging)", got)
+	}
+
+	dep300, err := store.GetByExternalID(context.Background(), "github.com:deployment:acme/widgets:300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, dep300.Koid, string(ontology.RelProduced), knowledge.Inbound, 1,
+		"github.com:build:acme/widgets:200")
+	githubtest.AssertReaches(t, store, dep300.Koid, string(ontology.RelAffects), knowledge.Outbound, 1,
+		"github.com:service:acme/widgets:production")
+	dep301, err := store.GetByExternalID(context.Background(), "github.com:deployment:acme/widgets:301")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), dep301.Koid, string(ontology.RelProduced), knowledge.Inbound, 1)
+	if err != nil || len(got) != 0 {
+		t.Errorf("deployment at a sha with no build must leave no PRODUCED edge: %+v, %v", got, err)
+	}
+
+	// Run 2: deployment 302 sits at ShaB like 300, but build 200 is now
+	// watermark-skipped — the link must resolve through the store.
+	w.AddDeploymentToOldBuild()
+	res2, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res2.Counts["Deployment"]; got != (github.Count{New: 1}) {
+		t.Errorf("run2 Deployment count = %+v, want 1 new", got)
+	}
+	if got := res2.Counts["Service"]; got != (github.Count{}) {
+		t.Errorf("run2 Service count = %+v, want zero (production exists)", got)
+	}
+	dep302, err := store.GetByExternalID(context.Background(), "github.com:deployment:acme/widgets:302")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, dep302.Koid, string(ontology.RelProduced), knowledge.Inbound, 1,
+		"github.com:build:acme/widgets:200")
+}
+
 func TestSyncRun2Delta(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	store := knowledge.NewMemory()

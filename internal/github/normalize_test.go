@@ -7,6 +7,34 @@ import (
 	gh "github.com/google/go-github/v92/github"
 )
 
+// Roadmap Milestone C: deployments normalize to Deployment objects carrying
+// the environment and deployed sha; the service is the repo-scoped
+// environment name.
+func TestToDeployment(t *testing.T) {
+	created := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	got := toDeployment(&gh.Deployment{
+		ID:          int64ptr(300),
+		SHA:         strptr("abc"),
+		Ref:         strptr("main"),
+		Environment: strptr("production"),
+		Description: strptr("nightly deploy"),
+		CreatedAt:   tst(created),
+		UpdatedAt:   tst(created.Add(time.Hour)),
+	}, "acme", "widgets")
+	if got.Repository != "acme/widgets" || got.ID != 300 || got.SHA != "abc" || got.Ref != "main" ||
+		got.Environment != "production" || got.Description != "nightly deploy" {
+		t.Fatalf("toDeployment fields = %+v", got)
+	}
+	if !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(created.Add(time.Hour)) {
+		t.Fatalf("toDeployment times = %v / %v", got.CreatedAt, got.UpdatedAt)
+	}
+
+	svc := toService("acme", "widgets", "production")
+	if svc.Repository != "acme/widgets" || svc.Name != "production" {
+		t.Fatalf("toService = %+v", svc)
+	}
+}
+
 func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
 func strptr(s string) *string       { return &s }
 func int64ptr(i int64) *int64       { return &i }

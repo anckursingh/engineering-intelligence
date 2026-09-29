@@ -80,6 +80,21 @@ package ontology
 //	                cardinality: N:M
 //	                test: TestSyncCI
 //
+//	PRODUCED        source Build → target Deployment
+//	                meaning: the workflow run's head commit is the deployed
+//	                sha — the strongest link GitHub exposes; deployments
+//	                created by Actions carry no run id, so the edge is sha
+//	                association, never a causation claim
+//	                inverse: deployments from this build (inbound traversal)
+//	                cardinality: N:M (re-runs at the same sha)
+//	                test: TestSyncDeployments
+//
+//	AFFECTS         source Deployment → target Service
+//	                meaning: the deployment touched the service
+//	                inverse: affected by (inbound traversal)
+//	                cardinality: N:M
+//	                test: TestSyncDeployments
+//
 //	RESOLVES_TO     source SourceIdentity → target Engineer
 //	                meaning: this source identity is that canonical engineer;
 //	                identity-layer edge, never a source-domain fact
@@ -106,6 +121,8 @@ const (
 	RelContainsReview  RelType = "CONTAINS_REVIEW"
 	RelContainsBuild   RelType = "CONTAINS_BUILD"
 	RelHasBuild        RelType = "HAS_BUILD" // PullRequest → Build; outcome lives on the Build
+	RelProduced        RelType = "PRODUCED"  // Build → Deployment; sha association, never causation
+	RelAffects         RelType = "AFFECTS"   // Deployment → Service
 	RelResolvesTo      RelType = "RESOLVES_TO"
 	RelAIContributes   RelType = "AI_CONTRIBUTES"
 )

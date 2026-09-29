@@ -57,6 +57,11 @@ type World struct {
 	reviews []*gh.PullRequestReview
 	runs    []*gh.WorkflowRun
 
+	// deployments serves /repos/{repo}/deployments. AddDeployments fills it;
+	// AddDeploymentToOldBuild adds the delta leg (a deployment whose sha
+	// matches a build the second sync run watermark-skips).
+	deployments []*gh.Deployment
+
 	// prCommits serves /pulls/{n}/commits — the PR's own branch commits,
 	// which the default-branch walk never sees. Absent numbers answer the
 	// empty list, like the real API for a PR with no commits left.
@@ -470,6 +475,53 @@ func (w *World) FinishInProgressBuild() {
 	w.runs[2].UpdatedAt = tst(time.Now().UTC())
 }
 
+// AddDeployments appends the deployment fixture: #300 to production at
+// ShaB (build 200's head sha — the fresh-build link) and #301 to staging
+// at DeadSha (no build at that sha — must leave no PRODUCED edge).
+func (w *World) AddDeployments() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	w.deployments = append(w.deployments,
+		&gh.Deployment{
+			ID:          int64ptr(300),
+			SHA:         strptr(ShaB),
+			Ref:         strptr("main"),
+			Environment: strptr("production"),
+			URL:         strptr("https://api.github.com/repos/acme/widgets/deployments/300"),
+			CreatedAt:   tst(t0.Add(38 * time.Hour)),
+			UpdatedAt:   tst(t0.Add(38 * time.Hour)),
+		},
+		&gh.Deployment{
+			ID:          int64ptr(301),
+			SHA:         strptr(DeadSha),
+			Ref:         strptr("main"),
+			Environment: strptr("staging"),
+			URL:         strptr("https://api.github.com/repos/acme/widgets/deployments/301"),
+			CreatedAt:   tst(t0.Add(39 * time.Hour)),
+			UpdatedAt:   tst(t0.Add(39 * time.Hour)),
+		},
+	)
+}
+
+// AddDeploymentToOldBuild adds the delta leg between runs: a deployment at
+// ShaB created now — its build (run 200) predates the first run's watermark,
+// so the second run must link it through the store, not the fresh-run map.
+func (w *World) AddDeploymentToOldBuild() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now().UTC()
+	w.deployments = append(w.deployments, &gh.Deployment{
+		ID:          int64ptr(302),
+		SHA:         strptr(ShaB),
+		Ref:         strptr("main"),
+		Environment: strptr("production"),
+		URL:         strptr("https://api.github.com/repos/acme/widgets/deployments/302"),
+		CreatedAt:   tst(now),
+		UpdatedAt:   tst(now),
+	})
+}
+
 // FailFirstOrgCallOnce makes the first org call return a 403 rate-limit
 // response (the retry test).
 func (w *World) FailFirstOrgCallOnce() {
@@ -644,6 +696,12 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 		http.NotFound(rw, r)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/deployments"):
+		if r.URL.Path == "/repos/acme/widgets/deployments" {
+			encode(rw, w.deployments)
+			return
+		}
+		encode(rw, []*gh.Deployment{})
 	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/actions/runs"):
 		if r.URL.Path == "/repos/acme/widgets/actions/runs" {
 			encode(rw, &gh.WorkflowRuns{TotalCount: intptr(len(w.runs)), WorkflowRuns: w.runs})

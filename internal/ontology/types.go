@@ -121,3 +121,27 @@ type Build struct {
 	CompletedAt time.Time `json:"completed_at"`
 	HTMLURL     string    `json:"html_url,omitempty"`
 }
+
+// Deployment is a GitHub deployment record. GitHub's deployments API carries
+// no html_url; provenance uses the API URL. State/status deliberately absent:
+// the deployments list has no terminal state (statuses are a separate
+// endpoint) and nothing consumes it yet.
+type Deployment struct {
+	Repository  string    `json:"repository"`
+	ID          int64     `json:"id"`
+	Environment string    `json:"environment"`
+	SHA         string    `json:"sha"` // the deployed commit
+	Ref         string    `json:"ref,omitempty"`
+	Description string    `json:"description,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Service is the product-level entity a deployment affects. In the
+// GitHub-only world the service IS the repo-scoped environment name (one
+// repo, many environments = many services); non-GitHub service registries
+// join through the same type later.
+type Service struct {
+	Repository string `json:"repository"`
+	Name       string `json:"name"` // the environment name
+}

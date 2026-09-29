@@ -86,6 +86,28 @@ func toIssue(i *gh.Issue, owner, repo string) ontology.Issue {
 	}
 }
 
+// toDeployment maps a GitHub deployment record. State/status deliberately
+// absent: the deployments list has no terminal state (statuses are a
+// separate endpoint) and nothing consumes it yet.
+func toDeployment(d *gh.Deployment, owner, repo string) ontology.Deployment {
+	return ontology.Deployment{
+		Repository:  repoRef(owner, repo),
+		ID:          d.GetID(),
+		Environment: d.GetEnvironment(),
+		SHA:         d.GetSHA(),
+		Ref:         d.GetRef(),
+		Description: d.GetDescription(),
+		CreatedAt:   ts(d.GetCreatedAt()),
+		UpdatedAt:   ts(d.GetUpdatedAt()),
+	}
+}
+
+// toService derives the product-level service from the GitHub world's only
+// service signal: the environment name, scoped to the repo.
+func toService(owner, repo, env string) ontology.Service {
+	return ontology.Service{Repository: repoRef(owner, repo), Name: env}
+}
+
 func toCommit(c *gh.RepositoryCommit, owner, repo string) ontology.Commit {
 	comm := c.GetCommit() // nil if GitHub could not resolve the commit object
 	var name, email, message string

@@ -191,6 +191,16 @@ Suite: `internal/github` (`client.go`, `sync_test.go`).
 - Fixture: `/graphql` answers `closingIssuesReferences` from `prCloses` per PR (PR#3 closes #1 — the same edge the regex produced, so every existing count pin holds).
 - Board and GET /metrics stay unchanged (7 definitions).
 
+## Deployments + services (item 40, post-contract — roadmap Milestone C)
+
+Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontology` (`rels.go`).
+
+- The sync now ingests each repo's deployments (`repos/{repo}/deployments`) as `ontology.Deployment` (id, sha, ref, environment, description, times — no state: the list has no terminal state and nothing consumes it yet) and derives `ontology.Service` from the environment name scoped to the repo (`github.com:service:<owner>/<repo>:<env>` — the GitHub-only world's service signal; env names are [A-Za-z0-9_-]+, so the id scheme stays collision-free).
+- AFFECTS (Deployment → Service) links each deployment to its service; PRODUCED (Build → Deployment) links it to every build whose head commit is the deployed sha — sha association, never causation (Actions-created deployments carry no run id, so the sha is the strongest link GitHub exposes).
+- Every listed run records into `buildRunIDsBySHA` BEFORE the watermark gate, so a deployment at a sha whose build predates the window still links through the store's deterministic `BuildExternalID` lookup; a build older than the store's window yields no edge. The maps reset per repo at the top of syncCI — a sha is content-addressed, so cross-repo runs at the same sha must not leak edges. Deployments themselves are not watermark-gated (one short list call; idempotent upserts make re-listing free).
+- `TestToDeployment` pins the mapping (incl. toService); `TestSyncDeployments` pins the two-edge graph (dep300 → build 200 over PRODUCED, → production over AFFECTS), the no-build-sha silence (dep301 at DeadSha leaves no PRODUCED edge), and the run-2 leg: dep302 at ShaB links through the store to build 200 (watermark-skipped in run 2), zero extra API calls. The Milestone C exit graph Build → Deployment → Service reconstructs.
+- Board and GET /metrics stay unchanged (7 definitions).
+
 ## Commit ↔ PR links (item 38, post-contract — roadmap Milestone B)
 
 Suite: `internal/github` (`sync_test.go`), `internal/ontology` (`rels.go`).

@@ -59,6 +59,13 @@ type syncer struct {
 
 	shaToCommit map[string]string // sha → commit koid (merge-commit lookup)
 	issueKoids  map[int]string    // issue number → koid, per repo
+
+	// Build→deployment sha links. Every listed run records here BEFORE the
+	// watermark gate (fresh and skipped alike): a deployment at a sha whose
+	// build predates the window still links through the store lookup below.
+	// Scoped per repo at the top of syncCI.
+	buildRunIDsBySHA map[string][]int64 // lowercased sha → workflow run ids
+	buildKoids       map[int64]string   // run id → build koid, fresh runs only
 }
 
 // upsert counts New/Updated honestly: the store bumps Version only when the
@@ -147,14 +154,16 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		store = knowledge.WithTenant(store, cfg.Tenant)
 	}
 	s := &syncer{
-		ctx:         ctx,
-		client:      client,
-		store:       store,
-		run:         run,
-		resolver:    identity.NewResolver(store, run, "github", ""),
-		counts:      map[string]Count{},
-		shaToCommit: map[string]string{},
-		issueKoids:  map[int]string{},
+		ctx:              ctx,
+		client:           client,
+		store:            store,
+		run:              run,
+		resolver:         identity.NewResolver(store, run, "github", ""),
+		counts:           map[string]Count{},
+		shaToCommit:      map[string]string{},
+		issueKoids:       map[int]string{},
+		buildRunIDsBySHA: map[string][]int64{},
+		buildKoids:       map[int64]string{},
 	}
 
 	// Owner account: the org endpoint first, the user endpoint on 404 —
@@ -249,6 +258,9 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		}
 		if err := s.syncCI(cfg.Owner, name, repoKoid, watermark); err != nil {
 			return nil, fmt.Errorf("github: sync CI runs %s: %w", key, err)
+		}
+		if err := s.syncDeployments(cfg.Owner, name); err != nil {
+			return nil, fmt.Errorf("github: sync deployments %s: %w", key, err)
 		}
 	}
 
@@ -620,7 +632,11 @@ func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error
 	if err != nil {
 		return err
 	}
+	s.buildRunIDsBySHA = map[string][]int64{}
+	s.buildKoids = map[int64]string{}
 	for _, run := range runs {
+		s.buildRunIDsBySHA[strings.ToLower(run.GetHeadSHA())] = append(
+			s.buildRunIDsBySHA[strings.ToLower(run.GetHeadSHA())], run.GetID())
 		if !watermark.IsZero() && ts(run.GetUpdatedAt()).Before(watermark) {
 			c := s.counts["Build"]
 			c.Skipped++
@@ -636,6 +652,7 @@ func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error
 		if err != nil {
 			return err
 		}
+		s.buildKoids[run.GetID()] = buildKoid
 		if err := s.relate(repoKoid, buildKoid, ontology.RelContainsBuild); err != nil {
 			return err
 		}
@@ -651,6 +668,67 @@ func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error
 				return fmt.Errorf("github: lookup PR for build link: %w", err)
 			}
 			if err := s.relate(prKO.Koid, buildKoid, ontology.RelHasBuild); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// syncDeployments ingests the repo's deployment records and the services
+// they touch: AFFECTS links a deployment to its environment-named service
+// (the GitHub world's only service signal), and PRODUCED links it to every
+// build whose head commit is the deployed sha — sha association (Actions
+// deployments carry no run id), never a causation claim. Builds the
+// watermark skipped resolve through the store by deterministic external id;
+// a build older than the store's window yields no edge. Deployments
+// themselves are not watermark-gated — the list is one call and short;
+// idempotent upserts make re-listing free.
+func (s *syncer) syncDeployments(owner, repo string) error {
+	deps, err := paginate(s.ctx, s.client, "deployments.list", func(page int) ([]*gh.Deployment, *gh.Response, error) {
+		return s.client.gh.Repositories.ListDeployments(s.ctx, owner, repo, &gh.DeploymentsListOptions{
+			ListOptions: gh.ListOptions{PerPage: 100, Page: page},
+		})
+	})
+	if err != nil {
+		return err
+	}
+	for _, d := range deps {
+		depOnt := toDeployment(d, owner, repo)
+		ko, err := depOnt.KnowledgeObject(ontology.NewProvenance(d.GetURL(), depOnt.UpdatedAt))
+		if err != nil {
+			return err
+		}
+		depKoid, err := s.upsert(ko)
+		if err != nil {
+			return err
+		}
+		if env := depOnt.Environment; env != "" {
+			svcKO, err := toService(owner, repo, env).KnowledgeObject(ontology.NewProvenance(d.GetURL(), depOnt.UpdatedAt))
+			if err != nil {
+				return err
+			}
+			svcKoid, err := s.upsert(svcKO)
+			if err != nil {
+				return err
+			}
+			if err := s.relate(depKoid, svcKoid, ontology.RelAffects); err != nil {
+				return err
+			}
+		}
+		for _, runID := range s.buildRunIDsBySHA[strings.ToLower(depOnt.SHA)] {
+			koid, ok := s.buildKoids[runID]
+			if !ok {
+				buildKO, err := s.store.GetByExternalID(s.ctx, ontology.BuildExternalID(owner, repo, runID))
+				if err != nil {
+					if errors.Is(err, knowledge.ErrNotFound) {
+						continue
+					}
+					return fmt.Errorf("github: lookup build %d for deployment link: %w", runID, err)
+				}
+				koid = buildKO.Koid
+			}
+			if err := s.relate(koid, depKoid, ontology.RelProduced); err != nil {
 				return err
 			}
 		}
