@@ -42,13 +42,19 @@ func relate(t *testing.T, store knowledge.KnowledgeStore, rel knowledge.Relation
 
 // seedWorld builds the KG shape the population builder reads: org → repo →
 // two PRs (4d cycle each) → one review each; PR 1 also carries one DIRECT
-// AI contribution.
+// AI contribution, and the repo one completed CI build.
 func seedWorld(t *testing.T, store knowledge.KnowledgeStore) {
 	t.Helper()
 	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
 	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
 	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
 	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	buildKO := upsert(t, store, mapKO(t, ontology.Build{
+		Repository: "acme/widgets", ID: 200, Name: "CI", HeadSHA: "abc",
+		Conclusion: "success", Status: "completed",
+		CompletedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: buildKO.Koid})
 
 	created := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	for _, n := range []int{1, 2} {
@@ -86,6 +92,12 @@ func TestPopulationFromScope(t *testing.T) {
 	}
 	if len(pop.CodeContributions) != 1 {
 		t.Fatalf("population = %d AI contributions, want 1", len(pop.CodeContributions))
+	}
+	if len(pop.Builds) != 1 {
+		t.Fatalf("population = %d builds, want 1", len(pop.Builds))
+	}
+	if b := pop.Builds[0]; b.Value.Conclusion != "success" || b.Value.CompletedAt.IsZero() {
+		t.Errorf("build did not round-trip: %+v", b)
 	}
 	if c := pop.CodeContributions[0]; !strings.HasPrefix(c.ExternalID, "ei.com:ai-contribution:") || c.Value.Attribution.Level != ontology.AttributionDirect {
 		t.Errorf("contribution did not round-trip: %+v", c)

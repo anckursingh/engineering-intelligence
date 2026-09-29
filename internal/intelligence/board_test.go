@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
+	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
 const boardURL = "/board?scope=github.com:org:acme&start=2026-09-01T00:00:00Z&end=2026-10-01T00:00:00Z"
@@ -168,6 +170,47 @@ func TestBoardBadRequests(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("GET %s = %d, want 400", u, rec.Code)
 		}
+	}
+}
+
+// TestBoardQualityWithCI: with CI builds ingested, the Quality section
+// carries the pass rate (CALCULATED + evidence); the static "no CI source"
+// note is for worlds without builds.
+func TestBoardQualityWithCI(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	sep := func(day int) time.Time { return time.Date(2026, 9, day, 0, 0, 0, 0, time.UTC) }
+	for i, verdict := range []string{"success", "success", "success", "failure"} {
+		b := upsert(t, store, mapKO(t, ontology.Build{
+			Repository: "acme/widgets", ID: int64(200 + i), Name: "CI",
+			Conclusion: verdict, Status: "completed", CompletedAt: sep(3 + i),
+		}.KnowledgeObject, prov))
+		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: b.Koid})
+	}
+
+	api := NewAPI(store)
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, boardURL, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /board = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got board
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	quality := got.Sections[1]
+	if len(quality.Items) != 1 || quality.Items[0].Metric != "ci_pass_rate" {
+		t.Fatalf("Quality section = %+v, want one ci_pass_rate item", quality)
+	}
+	it := quality.Items[0]
+	if it.Value != 75.0 || it.Unit != "%" || it.EpistemicState != "CALCULATED" || len(it.Evidence) == 0 {
+		t.Errorf("ci_pass_rate = %+v, want 75.0%% CALCULATED with evidence", it)
+	}
+	if quality.Note != "" {
+		t.Errorf("Quality note = %q, want none when data exists", quality.Note)
 	}
 }
 

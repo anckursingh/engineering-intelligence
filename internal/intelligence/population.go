@@ -31,6 +31,17 @@ func Population(ctx context.Context, store knowledge.KnowledgeStore, scope strin
 		return pop, fmt.Errorf("intelligence: traverse repos of %s: %w", scope, err)
 	}
 	for _, repo := range repos {
+		builds, err := store.Traverse(ctx, repo.Koid, string(ontology.RelContainsBuild), knowledge.Outbound, 1)
+		if err != nil {
+			return pop, fmt.Errorf("intelligence: traverse builds of %s: %w", repo.ExternalID, err)
+		}
+		for _, b := range builds {
+			build, err := convert[ontology.Build](b)
+			if err != nil {
+				return pop, fmt.Errorf("intelligence: decode build %s: %w", b.ExternalID, err)
+			}
+			pop.Builds = append(pop.Builds, metrics.Entity[ontology.Build]{ExternalID: b.ExternalID, Value: build})
+		}
 		prs, err := store.Traverse(ctx, repo.Koid, string(ontology.RelTargets), knowledge.Inbound, 1)
 		if err != nil {
 			return pop, fmt.Errorf("intelligence: traverse PRs of %s: %w", repo.ExternalID, err)

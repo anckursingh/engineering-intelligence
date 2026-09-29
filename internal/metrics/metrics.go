@@ -28,6 +28,7 @@ type Entity[T any] struct {
 type Population struct {
 	PullRequests      []Entity[ontology.PullRequest]
 	Reviews           []Entity[ontology.Review]
+	Builds            []Entity[ontology.Build]
 	CodeContributions []Entity[ontology.CodeContribution]
 	AgentRuns         []Entity[ontology.AgentRun]
 	AgentTasks        []Entity[ontology.AgentTask]

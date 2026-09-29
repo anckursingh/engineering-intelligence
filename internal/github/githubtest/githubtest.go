@@ -53,6 +53,7 @@ type World struct {
 	issue1  *gh.Issue // /issues/{n} on-demand refetch
 	prs     []*gh.PullRequest
 	reviews []*gh.PullRequestReview
+	runs    []*gh.WorkflowRun
 
 	userOwner      bool // /orgs/{owner} 404s; /users/{owner} serves the account
 	failOrgOnce    bool
@@ -330,6 +331,55 @@ func (w *World) AddLinkVariants() {
 	}
 }
 
+// AddBuilds appends the CI fixture: one passed PR-linked run, one failed run,
+// one in-progress run (t0 = now − 10d, matching NewWorld's clock).
+func (w *World) AddBuilds() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	w.runs = append(w.runs,
+		&gh.WorkflowRun{
+			ID:           int64ptr(200),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("completed"),
+			Conclusion:   strptr("success"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/200"),
+			RunStartedAt: tst(t0.Add(32 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(33 * time.Hour)),
+			PullRequests: []*gh.PullRequest{{Number: intptr(3)}},
+		},
+		&gh.WorkflowRun{
+			ID:           int64ptr(201),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("completed"),
+			Conclusion:   strptr("failure"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/201"),
+			RunStartedAt: tst(t0.Add(34 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(35 * time.Hour)),
+		},
+		&gh.WorkflowRun{
+			ID:           int64ptr(202),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("in_progress"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/202"),
+			RunStartedAt: tst(t0.Add(36 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(36 * time.Hour)),
+		},
+	)
+}
+
+// FinishInProgressBuild completes run 202 (the delta test's second-run state).
+func (w *World) FinishInProgressBuild() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runs[2].Status = strptr("completed")
+	w.runs[2].Conclusion = strptr("failure")
+	w.runs[2].UpdatedAt = tst(time.Now().UTC())
+}
+
 // FailFirstOrgCallOnce makes the first org call return a 403 rate-limit
 // response (the retry test).
 func (w *World) FailFirstOrgCallOnce() {
@@ -449,6 +499,12 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, []*gh.PullRequestReview{})
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/actions/runs"):
+		if r.URL.Path == "/repos/acme/widgets/actions/runs" {
+			encode(rw, &gh.WorkflowRuns{TotalCount: intptr(len(w.runs)), WorkflowRuns: w.runs})
+			return
+		}
+		encode(rw, &gh.WorkflowRuns{WorkflowRuns: []*gh.WorkflowRun{}})
 	default:
 		http.NotFound(rw, r)
 	}

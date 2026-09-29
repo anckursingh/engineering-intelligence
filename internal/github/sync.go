@@ -254,6 +254,9 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		if err := s.syncPRs(cfg.Owner, name, repoKoid, watermark); err != nil {
 			return nil, fmt.Errorf("github: sync pull requests %s: %w", key, err)
 		}
+		if err := s.syncCI(cfg.Owner, name, repoKoid, watermark); err != nil {
+			return nil, fmt.Errorf("github: sync CI runs %s: %w", key, err)
+		}
 	}
 
 	// Advance the checkpoint only after a fully successful run: a crash
@@ -529,6 +532,63 @@ func (s *syncer) syncReviews(owner, repo string, prKoid string, prNumber int) er
 				return err
 			}
 			if err := s.relate(prKoid, engKoid, ontology.RelReviewedBy); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// syncCI fetches the repo's workflow runs as Build objects, hanging off the
+// repo (CONTAINS_BUILD) and off the PRs the API links them to (PASSED).
+// Incrementality is the same client-side watermark as issues/PRs: a run's
+// updated_at advances while it progresses, and freezes once it completes.
+// ponytail: the full list is fetched each run like every other entity — a
+// `created` filter joins when a repo accumulates thousands of runs.
+func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error {
+	runs, err := paginate(s.ctx, s.client, "actions.runs", func(page int) ([]*gh.WorkflowRun, *gh.Response, error) {
+		batch, resp, err := s.client.gh.Actions.ListRepositoryWorkflowRuns(s.ctx, owner, repo, &gh.ListWorkflowRunsOptions{
+			ListOptions: gh.ListOptions{PerPage: 100, Page: page},
+		})
+		if err != nil {
+			return nil, resp, err
+		}
+		return batch.WorkflowRuns, resp, nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if !watermark.IsZero() && ts(run.GetUpdatedAt()).Before(watermark) {
+			c := s.counts["Build"]
+			c.Skipped++
+			s.counts["Build"] = c
+			continue
+		}
+		buildOnt := toBuild(run, owner, repo)
+		ko, err := buildOnt.KnowledgeObject(ontology.NewProvenance(run.GetHTMLURL(), ts(run.GetUpdatedAt())))
+		if err != nil {
+			return err
+		}
+		buildKoid, err := s.upsert(ko)
+		if err != nil {
+			return err
+		}
+		if err := s.relate(repoKoid, buildKoid, ontology.RelContainsBuild); err != nil {
+			return err
+		}
+		// The run's pull_requests array names the PRs it covers. A PR the
+		// sync has not seen yet (or a build from before the repo's history
+		// window) yields no edge — the run still stores, unlinked.
+		for _, p := range run.PullRequests {
+			prKO, err := s.store.GetByExternalID(s.ctx, ontology.PRExternalID(owner, repo, p.GetNumber()))
+			if err != nil {
+				if errors.Is(err, knowledge.ErrNotFound) {
+					continue
+				}
+				return fmt.Errorf("github: lookup PR for build link: %w", err)
+			}
+			if err := s.relate(prKO.Koid, buildKoid, ontology.RelPassed); err != nil {
 				return err
 			}
 		}

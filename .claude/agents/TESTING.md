@@ -60,7 +60,8 @@ Every persisted relationship type is a data contract — do not rename casually.
 | CONTAINS_REVIEW | PullRequest → Review | REVERSED from old PART_OF (review→pr) |
 | AUTHORED / IMPLEMENTS / TARGETS / REVIEWED_BY | unchanged | — |
 
-PASSED (PullRequest → Build) is reserved until Build fetch lands.
+| CONTAINS_BUILD | Repository → Build | new — the CI fetch's repo→run edge |
+| PASSED | PullRequest → Build | was "reserved until Build fetch lands" — landed with the CI fetch |
 
 ## Connector hardening (§13)
 
@@ -154,7 +155,7 @@ Suite: `internal/metrics` (`ai_test.go`, package-internal) + the investigation f
 - §26 counting is pinned (`TestAIAssistedPRPctAttributionFiltering`): only valid DIRECT/STRONG telemetry claims count — INFERRED, UNKNOWN, bare DIRECT (no source), wrong-repo and orphan contributions never count; a PR with only those shows 0.0, with PR-only evidence.
 - Honest absence: a window with no objects yields NO observation (source silence is unknown, not zero — `none()` helper); `cost_per_completed_task` with no runs or no completed tasks is absence, not zero. `ai_assisted_pr_pct` differs: merged PRs with zero qualifying contributions is a real 0.0 — that design keeps the §23 fixture's factor list at 2 (flat 0.0→0.0 is not a candidate).
 - §18 edges pinned per metric: exact values, empty population, missing event times, duplicate external IDs, and a timezone-boundary case (an interaction at 2026-09-30 23:30 UTC is September in New York, October in Tokyo — in-window either way, instants not wall clocks).
-- Investigation wiring: `RelAIContributes` (CodeContribution → PullRequest, inbound walk in `Population`) brings contributions into the org-scoped graph; `ai_assisted_pr_pct` is a candidate factor — `TestCycleTimeChangeAIFactor` pins the statement gain ("AI-assisted PR percentage changed from 0.0 to 100.0 %." — the From==0 rule renders a percentage without a %-of-%), `TestCycleTimeChangeAIFlatExcluded` pins that a flat share is not listed. GET /metrics now returns 4 definitions (the API test tracks the candidate table).
+- Investigation wiring: `RelAIContributes` (CodeContribution → PullRequest, inbound walk in `Population`) brings contributions into the org-scoped graph; `ai_assisted_pr_pct` is a candidate factor — `TestCycleTimeChangeAIFactor` pins the statement gain ("AI-assisted PR percentage changed from 0.0 to 100.0 %." — the From==0 rule renders a percentage without a %-of-%), `TestCycleTimeChangeAIFlatExcluded` pins that a flat share is not listed. GET /metrics now returns 5 definitions (the API test tracks the candidate table).
 - Deferred (documented): AI-related rework (no rework signal in any source); run/task/interaction metrics as investigation factors (telemetry objects carry no org/repo edge — a connector that links them joins the candidates then; the metrics themselves are ready and tested).
 
 ## Product board (§28)
@@ -163,10 +164,20 @@ Suite: `internal/intelligence` (`board_test.go`; Memory + live AikoqlStore).
 
 - GET /board?scope=<extID>&start=<RFC3339>&end=<RFC3339> returns the doc's five sections in order: Engineering Flow, Quality, Reliability, AI Development, Evidence Coverage (`TestBoardSections` pins order + titles).
 - Engineering Flow = window means of cycle_time / review_latency / throughput; AI Development = ai_assisted_pr_pct. Every item carries `metric/label/value/unit/epistemic_state/evidence` — the same calculated-evidence discipline as investigations.
-- Honest absence: Quality ("no CI source ingested yet") and Reliability ("no deployment or incident data") are static notes — never fabricated numbers; a window with no data returns the same five sections with notes (`TestBoardEmptyWindow`); coverage with nothing to cover carries a note.
+- Honest absence: Quality ("no CI data — no workflow runs ingested yet") and Reliability ("no deployment or incident data") are notes — never fabricated numbers; a window with no data returns the same five sections with notes (`TestBoardEmptyWindow`); coverage with nothing to cover carries a note.
 - Evidence Coverage = per epistemic state present, the count of distinct objects backing it (§28 "how strong is the evidence" as object counts, not a confidence score).
 - No individual ranking (`TestBoardNoIndividualRanking`) — by construction: items cite only PR/review/contribution objects. Check structurally (no `Engineer`/`SourceIdentity` evidence types, no identity keys) — the word "Engineering" trips a substring check on the doc's own title.
 - Unknown scope → 400 (a navigation typo; POST /investigations keeps 500 — there scope comes from a request body). "What changed / why" stays the investigations endpoint's job.
+
+## CI workflow runs + ci_pass_rate (item 32, post-contract)
+
+Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/metrics` (`ci_test.go`), `internal/intelligence` (`population_test.go`, `board_test.go`; Memory + live AikoqlStore).
+
+- The GitHub sync now fetches workflow runs per repo (`Actions.ListRepositoryWorkflowRuns` — the v92 name; the real API wraps them in a `workflow_runs` envelope, not a bare array) as the long-reserved `ontology.Build` objects, then CI-watermarks, upserts, and edges them: `CONTAINS_BUILD` (repo → run) and `PASSED` (PR → run, resolved from the run's own `pull_requests` array — a PR the sync has never seen yields no edge, the run still stores).
+- `TestToBuild` — the list endpoint carries no completed_at: a completed run's updated_at stands for completion (GitHub stops touching the record once a run finishes) and an in-progress run's CompletedAt stays zero so its advancing updated_at re-passes the watermark and flips when it finishes.
+- `TestSyncCI` — run 1: counts `{Build: {New: 3}}`, repo→CONTAINS_BUILD outbound reaches all 3, PR#3→PASSED outbound reaches the success build; run 2 after `FinishInProgressBuild`: `{Updated: 1, Skipped: 2}` (the finished run re-normalizes; the settled ones watermark-skip).
+- `ci_pass_rate` (new candidate, so the board's Quality section and GET /metrics both grew): success / verdict runs × 100 where a verdict is success|failure|timed_out — cancelled/skipped runs never tested the code and a conclusion-less run is unclassifiable, so neither counts (`TestCIPassRateExact` — 2 success + 1 failure + 1 timed_out + 1 cancelled → 50.0, the 4 verdict builds cited; `TestCIPassRateExcludesNoVerdict`; `TestCIPassRateAbsence` — empty/out-of-window/only-cancelled → nil, silence is not zero). Anchored at completed_at (§19), CALCULATED with every counted Build in evidence.
+- Board: Quality carries ci_pass_rate when builds exist (`TestBoardQualityWithCI` — 3 success + 1 failure → 75.0 %) and the honest note otherwise; the population walk traverses CONTAINS_BUILD outbound (pinned in `TestPopulationFromScope`).
 
 ## Dashboard + board caching (item 31, post-contract)
 
@@ -262,7 +273,7 @@ Do not claim scalability until measured. Currently measured: per-op latency only
 ## §38 MVP questions — answerable through the built API
 
 1. What changed in engineering performance? → `POST /ask` + `POST /investigations` (cycle time change)
-2. How did flow, quality and reliability change? → `GET /board` (flow metrics; quality/reliability honest notes until CI/deployment sources exist)
+2. How did flow, quality and reliability change? → `GET /board` (flow metrics + ci_pass_rate; reliability honest note until a deployment/incident source exists)
 3. How is AI-assisted development changing the workflow? → `ai_assisted_pr_pct` on the board + as an investigation factor
 4. What evidence supports the observed change? → every observation/factor carries an `evidence` array citing object IDs (§20)
 5. What is observed versus calculated versus inferred? → `epistemic_state` per observation + board Evidence Coverage section

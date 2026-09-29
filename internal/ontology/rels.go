@@ -48,6 +48,18 @@ package ontology
 //	                cardinality: 1:N
 //	                test: AC-KG-001 + TestSyncRun1Full
 //
+//	CONTAINS_BUILD  source Repository → target Build
+//	                meaning: the workflow run happened in the repo
+//	                inverse: runs in repo (inbound traversal)
+//	                cardinality: 1:N
+//	                test: TestSyncCI + TestPopulationFromScope
+//
+//	PASSED          source PullRequest → target Build
+//	                meaning: the run was triggered by (and covers) the PR
+//	                inverse: builds covering the PR (inbound traversal)
+//	                cardinality: N:M
+//	                test: TestSyncCI
+//
 //	RESOLVES_TO     source SourceIdentity → target Engineer
 //	                meaning: this source identity is that canonical engineer;
 //	                identity-layer edge, never a source-domain fact
@@ -70,7 +82,8 @@ const (
 	RelReviewedBy     RelType = "REVIEWED_BY"
 	RelMergedAs       RelType = "MERGED_AS"
 	RelContainsReview RelType = "CONTAINS_REVIEW"
-	RelPassed         RelType = "PASSED" // PullRequest → Build; reserved until Build fetch lands
+	RelContainsBuild  RelType = "CONTAINS_BUILD"
+	RelPassed         RelType = "PASSED" // PullRequest → Build
 	RelResolvesTo     RelType = "RESOLVES_TO"
 	RelAIContributes  RelType = "AI_CONTRIBUTES"
 )

@@ -45,7 +45,7 @@ type board struct {
 // candidates table is the metric registry: 0-2 are the flow set, 3 is the
 // AI-assisted share (the org-reachable AI metric).
 func buildBoard(pop metrics.Population, win metrics.Window) board {
-	var flow, ai []boardItem
+	var flow, ai, quality []boardItem
 	for _, c := range []candidate{candidates[0], candidates[1], candidates[2]} {
 		if v, ok, ev := summarize(c.compute(pop, win)); ok {
 			flow = append(flow, boardItem{Metric: c.name, Label: c.label, Value: v, Unit: c.unit,
@@ -56,19 +56,26 @@ func buildBoard(pop metrics.Population, win metrics.Window) board {
 		ai = append(ai, boardItem{Metric: candidates[3].name, Label: candidates[3].label, Value: v, Unit: candidates[3].unit,
 			EpistemicState: evidence.StateCalculated.String(), Evidence: ev})
 	}
+	if v, ok, ev := summarize(candidates[4].compute(pop, win)); ok {
+		quality = append(quality, boardItem{Metric: candidates[4].name, Label: candidates[4].label, Value: v, Unit: candidates[4].unit,
+			EpistemicState: evidence.StateCalculated.String(), Evidence: ev})
+	}
 	sections := []boardSection{
 		{ID: "engineering_flow", Title: "Engineering Flow", Items: flow},
-		{ID: "quality", Title: "Quality", Note: "no quality data — no CI source ingested yet"},
+		{ID: "quality", Title: "Quality", Items: quality},
 		{ID: "reliability", Title: "Reliability", Note: "no deployment or incident data — no sources ingested yet"},
 		{ID: "ai_development", Title: "AI Development", Items: ai},
 	}
 	if len(flow) == 0 {
 		sections[0].Note = "no flow data in this window"
 	}
+	if len(quality) == 0 {
+		sections[1].Note = "no CI data — no workflow runs ingested yet"
+	}
 	if len(ai) == 0 {
 		sections[3].Note = "no AI telemetry linked to this scope"
 	}
-	return board{Sections: append(sections, evidenceCoverage(append(flow, ai...)))}
+	return board{Sections: append(sections, evidenceCoverage(append(append(flow, ai...), quality...)))}
 }
 
 // evidenceCoverage reports, per epistemic state present in the board's

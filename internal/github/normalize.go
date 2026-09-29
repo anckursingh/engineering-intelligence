@@ -138,3 +138,27 @@ func toReview(r *gh.PullRequestReview, owner, repo string, prNumber int) ontolog
 		SubmittedAt:   ts(r.GetSubmittedAt()),
 	}
 }
+
+// toBuild maps a workflow run. The list endpoint carries no completed_at:
+// for a completed run, updated_at IS the completion (GitHub stops touching
+// the record once the run finishes); for an unfinished run there is no
+// completion time, so CompletedAt stays zero and the run is re-normalized
+// on the next sync once it finishes (its updated_at advances past the
+// watermark).
+func toBuild(r *gh.WorkflowRun, owner, repo string) ontology.Build {
+	completed := time.Time{}
+	if r.GetStatus() == "completed" {
+		completed = ts(r.GetUpdatedAt())
+	}
+	return ontology.Build{
+		Repository:  repoRef(owner, repo),
+		ID:          r.GetID(),
+		Name:        r.GetName(),
+		HeadSHA:     r.GetHeadSHA(),
+		Conclusion:  r.GetConclusion(),
+		Status:      r.GetStatus(),
+		StartedAt:   ts(r.GetRunStartedAt()),
+		CompletedAt: completed,
+		HTMLURL:     r.GetHTMLURL(),
+	}
+}

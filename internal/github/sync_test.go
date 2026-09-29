@@ -338,3 +338,62 @@ func TestPRToIssueLinks(t *testing.T) {
 		t.Errorf("nonexistent referenced issue must leave no edge: %+v, %v", got, err)
 	}
 }
+
+// TestSyncCI: workflow runs normalize to Build objects hanging off the repo
+// (CONTAINS_BUILD), runs the API links to PRs get the PASSED edge, and the
+// second run gates on the watermark — completed earlier runs skip, the
+// finished in-progress run updates.
+func TestSyncCI(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddBuilds()
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Build"]; got != (github.Count{New: 3}) {
+		t.Errorf("Build count = %+v, want 3 new", got)
+	}
+	// base 9 relationships + 3 CONTAINS_BUILD + 1 PASSED (run 200 links PR #3)
+	if res.Relationships != 13 {
+		t.Errorf("relationships = %d, want 13", res.Relationships)
+	}
+
+	build, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:200")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if build.Properties["conclusion"] != "success" || build.Properties["head_sha"] != githubtest.ShaB {
+		t.Errorf("build 200 = %+v, want conclusion success + head sha", build.Properties)
+	}
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsBuild), knowledge.Outbound, 1,
+		"github.com:build:acme/widgets:200", "github.com:build:acme/widgets:201", "github.com:build:acme/widgets:202")
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelPassed), knowledge.Outbound, 1, "github.com:build:acme/widgets:200")
+
+	// between runs: run 202 completes; runs 200/201 predate the watermark
+	w.FinishInProgressBuild()
+	res2, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := res2.Counts["Build"]; c != (github.Count{Updated: 1, Skipped: 2}) {
+		t.Errorf("run2 Build = %+v, want updated 1 skipped 2", c)
+	}
+	build202, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if build202.Properties["status"] != "completed" || build202.Properties["conclusion"] != "failure" {
+		t.Errorf("build 202 = %+v, want completed failure", build202.Properties)
+	}
+}
