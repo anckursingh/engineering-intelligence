@@ -46,6 +46,7 @@ type World struct {
 	mu sync.Mutex
 
 	org     *gh.Organization
+	user    *gh.User
 	repos   []*gh.Repository
 	commits []*gh.RepositoryCommit
 	issues  []*gh.Issue
@@ -53,6 +54,7 @@ type World struct {
 	prs     []*gh.PullRequest
 	reviews []*gh.PullRequestReview
 
+	userOwner      bool // /orgs/{owner} 404s; /users/{owner} serves the account
 	failOrgOnce    bool
 	failOrg        bool
 	orgCalls       int
@@ -189,6 +191,23 @@ func (w *World) SyncConfig(dir string, store knowledge.KnowledgeStore) github.Co
 		Sleep:          func(time.Duration) {},
 		Store:          store,
 	}
+}
+
+// NewUserWorld builds the same fixture world but with the owner as a
+// personal account: /orgs/{owner} 404s (forcing the connector's user
+// fallback) and /users/{owner} serves the account.
+func NewUserWorld(t *testing.T) *World {
+	w := NewWorld(t)
+	w.userOwner = true
+	w.user = &gh.User{
+		Login:     strptr("acme"),
+		Name:      strptr("Ace Coder"),
+		Bio:       strptr("test user"),
+		HTMLURL:   strptr("https://github.com/acme"),
+		CreatedAt: w.org.CreatedAt,
+		UpdatedAt: w.org.UpdatedAt,
+	}
+	return w
 }
 
 // NewIdentityWorld is the lean identity fixture: org + repo + two commits
@@ -342,6 +361,10 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/orgs/acme":
 		w.orgCalls++
+		if w.userOwner {
+			http.NotFound(rw, r)
+			return
+		}
 		if w.failOrg {
 			rw.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(rw).Encode(map[string]string{"message": "boom"})
@@ -356,6 +379,18 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		encode(rw, w.org)
 	case r.URL.Path == "/orgs/acme/repos":
+		encode(rw, w.repos)
+	case r.URL.Path == "/users/acme":
+		if !w.userOwner {
+			http.NotFound(rw, r)
+			return
+		}
+		encode(rw, w.user)
+	case r.URL.Path == "/users/acme/repos":
+		if !w.userOwner {
+			http.NotFound(rw, r)
+			return
+		}
 		encode(rw, w.repos)
 	case r.URL.Path == "/repos/acme/widgets/commits":
 		encode(rw, w.commits)

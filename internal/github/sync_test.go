@@ -75,6 +75,37 @@ func TestSyncRun1Full(t *testing.T) {
 	githubtest.AssertReaches(t, store, commitB.Koid, string(ontology.RelAuthored), knowledge.Inbound, 1, "github.com:email:bob@corp.example")
 }
 
+// TestSyncUserOwner: when the owner is a personal account, the org endpoint
+// 404s and the sync falls back to the user endpoint — the owner object is a
+// User (never an Organization), repos still hang off it via BELONGS_TO.
+func TestSyncUserOwner(t *testing.T) {
+	w := githubtest.NewUserWorld(t)
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := res.Counts["Organization"]; ok {
+		t.Errorf("user owner produced an Organization: %+v", res.Counts)
+	}
+	if got := res.Counts["User"]; got != (github.Count{New: 1}) {
+		t.Errorf("User count = %+v, want 1 new", got)
+	}
+	if got := w.OrgCalls(); got != 1 {
+		t.Errorf("org endpoint calls = %d, want 1 (the 404 that triggers the fallback)", got)
+	}
+
+	if _, err := store.GetByExternalID(context.Background(), "github.com:account:acme"); err != nil {
+		t.Errorf("user account object missing: %v", err)
+	}
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelBelongsTo), knowledge.Outbound, 1, "github.com:account:acme")
+}
+
 func TestSyncRun2Delta(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	store := knowledge.NewMemory()

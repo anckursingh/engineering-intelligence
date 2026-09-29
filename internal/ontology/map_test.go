@@ -10,7 +10,7 @@ import (
 
 func TestExternalIDScheme(t *testing.T) {
 	ids := []string{
-		OrgExternalID("acme"), UserExternalID("acme"), // same login, different type prefix
+		OrgExternalID("acme"), UserExternalID("acme"), AccountExternalID("acme"), // same login, different type prefix
 		IssueExternalID("o", "r", 7), PRExternalID("o", "r", 7), // same number, different prefix
 		CommitExternalID("o", "r", "ABCDEF"), // lowercased
 		ReviewExternalID("o", "r", 7, 1),
@@ -48,6 +48,31 @@ func TestEngineerExternalIDByRule(t *testing.T) {
 	}
 	if ko2.ExternalID != UserEmailExternalID("a@b.c") {
 		t.Errorf("email engineer external id = %q", ko2.ExternalID)
+	}
+}
+
+// TestUserAccountKnowledgeObject: a GitHub user account (the sync owner) is
+// its own type — never an Organization — with a prefix disjoint from the
+// engineer-keyed github.com:user: scheme.
+func TestUserAccountKnowledgeObject(t *testing.T) {
+	prov := NewProvenance("https://x", time.Now().UTC())
+	ko, err := User{Login: "alice", Name: "Alice", HTMLURL: "https://github.com/alice"}.KnowledgeObject(prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ko.TypeName != "User" {
+		t.Errorf("type name = %q, want User", ko.TypeName)
+	}
+	if ko.ExternalID != "github.com:account:alice" {
+		t.Errorf("external id = %q, want github.com:account:alice", ko.ExternalID)
+	}
+
+	engKO, err := Engineer{Login: "alice", IdentityKey: "login:alice", IdentityRule: "login"}.KnowledgeObject(prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ko.ExternalID == engKO.ExternalID {
+		t.Errorf("user account %q collides with login-keyed engineer %q", ko.ExternalID, engKO.ExternalID)
 	}
 }
 

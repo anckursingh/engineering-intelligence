@@ -30,7 +30,7 @@ func (r *repoList) String() string     { return fmt.Sprint([]string(*r)) }
 func (r *repoList) Set(v string) error { *r = append(*r, v); return nil }
 
 const usage = `usage:
-  ei sync github --owner ORG [--repo REPO]... [--checkpoint FILE] [--since RFC3339] --db DIR
+  ei sync github --owner ACCOUNT [--repo REPO]... [--checkpoint FILE] [--since RFC3339] --db DIR
   ei sync jira --base-url URL --email EMAIL --token TOKEN --project KEY [--since RFC3339] --db DIR
   ei ingest claude --dir DIR --db DIR
   ei serve --db DIR [--addr :8080]
@@ -101,7 +101,7 @@ func openStore(dbDir string) (knowledge.KnowledgeStore, func(), error) {
 func runGitHub(args []string) error {
 	fs := flag.NewFlagSet("ei sync github", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(fs.Output(), usage) }
-	owner := fs.String("owner", "", "GitHub organization login")
+	owner := fs.String("owner", "", "GitHub account login (user or organization)")
 	var repos repoList
 	fs.Var(&repos, "repo", "repository name (repeatable; empty = all org repos)")
 	checkpointPath := fs.String("checkpoint", ".ei/checkpoint.json", "checkpoint file")

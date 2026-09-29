@@ -105,6 +105,31 @@ func TestPopulationFromScope(t *testing.T) {
 	}
 }
 
+// TestPopulationFromUserScope: a user account scope root walks exactly like
+// an org one — the graph shape is identical, only the root type differs.
+func TestPopulationFromUserScope(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	user := upsert(t, store, mapKO(t, ontology.User{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: user.Koid})
+
+	created := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	prKO := upsert(t, store, mapKO(t, ontology.PullRequest{
+		Repository: "acme/widgets", Number: 1, Merged: true,
+		CreatedAt: created, MergedAt: created.Add(4 * 24 * time.Hour),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: prKO.Koid, To: repo.Koid})
+
+	pop, err := Population(context.Background(), store, ontology.AccountExternalID("acme"))
+	if err != nil {
+		t.Fatalf("population: %v", err)
+	}
+	if len(pop.PullRequests) != 1 {
+		t.Errorf("population = %d PRs, want 1", len(pop.PullRequests))
+	}
+}
+
 // TestPopulationScopeIsolation: a second org's graph never leaks into the
 // first scope.
 func TestPopulationScopeIsolation(t *testing.T) {

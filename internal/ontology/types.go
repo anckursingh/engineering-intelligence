@@ -14,6 +14,18 @@ type Organization struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// User is a personal GitHub account that owns repositories — the sync owner
+// when the account is not an organization. Distinct from Engineer: an
+// Engineer is a person derived from activity, a User is the account itself.
+type User struct {
+	Login     string    `json:"login"`
+	Name      string    `json:"name,omitempty"`
+	Bio       string    `json:"bio,omitempty"`
+	HTMLURL   string    `json:"html_url,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type Engineer struct {
 	Name         string `json:"name"`
 	Email        string `json:"email,omitempty"` // normalized; often empty (GitHub hides emails)

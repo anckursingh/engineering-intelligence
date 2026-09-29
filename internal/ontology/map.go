@@ -16,8 +16,13 @@ const connectorVersion = "github-connector/v0"
 // External-ID builders. Prefixes are disjoint across types, and the
 // delimiters cannot appear in GitHub logins or repo names, so the scheme
 // is collision-free without escaping.
-func OrgExternalID(login string) string           { return "github.com:org:" + login }
-func UserExternalID(login string) string          { return "github.com:user:" + login }
+func OrgExternalID(login string) string  { return "github.com:org:" + login }
+func UserExternalID(login string) string { return "github.com:user:" + login }
+
+// AccountExternalID names a personal GitHub account; the account: prefix is
+// disjoint from the engineer-keyed user: scheme, so a login can be both an
+// engineer and an account owner without colliding.
+func AccountExternalID(login string) string       { return "github.com:account:" + login }
 func UserEmailExternalID(normEmail string) string { return "github.com:email:" + normEmail }
 func RepoExternalID(owner, name string) string {
 	return fmt.Sprintf("github.com:repo:%s/%s", owner, name)
@@ -80,6 +85,10 @@ func KnowledgeObjectWithID(typeName, externalID string, v any, prov knowledge.Pr
 
 func (o Organization) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
 	return toKnowledgeObject("Organization", OrgExternalID(o.Login), o, prov)
+}
+
+func (u User) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	return toKnowledgeObject("User", AccountExternalID(u.Login), u, prov)
 }
 
 // Engineer picks the external ID by identity rule: email-based engineers are

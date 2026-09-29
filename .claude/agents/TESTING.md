@@ -68,6 +68,7 @@ PASSED (PullRequest → Build) is reserved until Build fetch lands.
 - [x] 13.2 incremental ingestion design — deferred: full-list polling stays until webhooks/events + cursor + reconciliation have equivalent acceptance coverage (do not build first)
 - [x] 13.3 merge commit model — `TestMergeCommitModel`: squash and rebase merges land their commit on the default branch (one MERGED_AS edge via the same history lookup); unavailable merge SHA leaves no edge, no error. PR→commits/head-commit/resulting-branch-state modeling joins when metrics need it
 - [x] 13.4 PR→issue linking — `TestPRToIssueLinks`: duplicate body references collapse to one IMPLEMENTS edge; a referenced issue that no longer exists (404) skips the link without failing the run. Authoritative linking data (GraphQL ClosingIssuesReferences) deferred — regex is fallback-only until it lands
+- [x] Personal-account owners (dogfood-driven) — org endpoint first, user endpoint on 404: `TestSyncUserOwner` (org 404 → user fetch, owner is a User never an Organization, BELONGS_TO reaches `github.com:account:<login>`); `TestUserAccountKnowledgeObject` (account prefix never collides with login-keyed engineers); `TestPopulationFromUserScope` (scope walk is root-type-agnostic); fixture `githubtest.NewUserWorld`
 
 Live-server spawn helper extracted to `internal/knowledge/aikoqltest.Live(t)` (used by contract, acceptance, ingestion, benchmarks).
 

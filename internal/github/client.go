@@ -37,6 +37,13 @@ func NewClient(token string, httpClient *http.Client) (*Client, error) {
 
 const maxRetries = 3
 
+// isNotFound reports a GitHub 404 — a definitive miss, not a retryable
+// failure (retry returns 4xx immediately).
+func isNotFound(err error) bool {
+	var gerr *gh.ErrorResponse
+	return errors.As(err, &gerr) && gerr.Response != nil && gerr.Response.StatusCode == http.StatusNotFound
+}
+
 // retry runs fn, retrying rate-limit errors (until the reset window) and
 // 5xx (1s/2s/4s backoff). 4xx errors return immediately. Honors ctx.
 func retry[T any](ctx context.Context, c *Client, name string, fn func() (T, *gh.Response, error)) (T, *gh.Response, error) {

@@ -36,6 +36,17 @@ func toOrganization(o *gh.Organization) ontology.Organization {
 	}
 }
 
+func toUser(u *gh.User) ontology.User {
+	return ontology.User{
+		Login:     u.GetLogin(),
+		Name:      u.GetName(),
+		Bio:       u.GetBio(),
+		HTMLURL:   u.GetHTMLURL(),
+		CreatedAt: ts(u.GetCreatedAt()),
+		UpdatedAt: ts(u.GetUpdatedAt()),
+	}
+}
+
 func toRepository(r *gh.Repository, fallbackOwner string) ontology.Repository {
 	owner := r.GetOwner().GetLogin()
 	if owner == "" {

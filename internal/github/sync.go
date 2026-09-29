@@ -164,25 +164,45 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		issueKoids:  map[int]string{},
 	}
 
-	// Organization.
+	// Owner account: the org endpoint first, the user endpoint on 404 —
+	// personal accounts (where the EI repos themselves live) are not
+	// organizations, and /orgs/{login} 404s for them.
 	org, _, err := retry(ctx, client, "orgs.get", func() (*gh.Organization, *gh.Response, error) {
 		return client.gh.Organizations.Get(ctx, cfg.Owner)
 	})
-	if err != nil {
+	if err != nil && !isNotFound(err) {
 		return nil, fmt.Errorf("github: get organization %s: %w", cfg.Owner, err)
 	}
-	orgOnt := toOrganization(org)
-	orgKO, err := orgOnt.KnowledgeObject(ontology.NewProvenance(orgOnt.HTMLURL, orgOnt.UpdatedAt))
+	var ownerKO knowledge.KnowledgeObject
+	if err == nil {
+		o := toOrganization(org)
+		ownerKO, err = o.KnowledgeObject(ontology.NewProvenance(o.HTMLURL, o.UpdatedAt))
+	} else {
+		acct, _, uerr := retry(ctx, client, "users.get", func() (*gh.User, *gh.Response, error) {
+			return client.gh.Users.Get(ctx, cfg.Owner)
+		})
+		if uerr != nil {
+			return nil, fmt.Errorf("github: get user %s: %w", cfg.Owner, uerr)
+		}
+		u := toUser(acct)
+		ownerKO, err = u.KnowledgeObject(ontology.NewProvenance(u.HTMLURL, u.UpdatedAt))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("github: map owner %s: %w", cfg.Owner, err)
+	}
+	ownerKoid, err := s.upsert(ownerKO)
 	if err != nil {
 		return nil, err
 	}
-	orgKoid, err := s.upsert(orgKO)
-	if err != nil {
-		return nil, err
-	}
+	userOwner := ownerKO.TypeName == "User"
 
 	// Repositories (forks skipped — ponytail: add "all" if forks matter).
 	repos, err := paginate(ctx, client, "repos.list", func(page int) ([]*gh.Repository, *gh.Response, error) {
+		if userOwner {
+			return client.gh.Repositories.List(ctx, cfg.Owner, &gh.RepositoryListOptions{
+				ListOptions: gh.ListOptions{PerPage: 100, Page: page},
+			})
+		}
 		return client.gh.Repositories.ListByOrg(ctx, cfg.Owner, &gh.RepositoryListByOrgOptions{
 			Type:        "sources",
 			ListOptions: gh.ListOptions{PerPage: 100, Page: page},
@@ -190,6 +210,16 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if userOwner {
+		// /users/{login}/repos has no "sources" filter; owned forks appear.
+		kept := repos[:0]
+		for _, r := range repos {
+			if !r.GetFork() {
+				kept = append(kept, r)
+			}
+		}
+		repos = kept
 	}
 	want := make(map[string]bool, len(cfg.Repos))
 	for _, r := range cfg.Repos {
@@ -211,7 +241,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := s.relate(repoKoid, orgKoid, ontology.RelBelongsTo); err != nil {
+		if err := s.relate(repoKoid, ownerKoid, ontology.RelBelongsTo); err != nil {
 			return nil, err
 		}
 
