@@ -62,6 +62,9 @@ type World struct {
 	// matches a build the second sync run watermark-skips).
 	deployments []*gh.Deployment
 
+	// releases serves /repos/{repo}/releases. AddReleases fills it.
+	releases []*gh.RepositoryRelease
+
 	// prCommits serves /pulls/{n}/commits — the PR's own branch commits,
 	// which the default-branch walk never sees. Absent numbers answer the
 	// empty list, like the real API for a PR with no commits left.
@@ -522,6 +525,35 @@ func (w *World) AddDeploymentToOldBuild() {
 	})
 }
 
+// AddReleases appends the release fixture: one stable release at ShaB and
+// one prerelease targeting main (target_commitish is a branch name there —
+// it must stay a property, never a commit edge).
+func (w *World) AddReleases() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	w.releases = append(w.releases,
+		&gh.RepositoryRelease{
+			ID:              700,
+			TagName:         "v1.0.0",
+			Name:            strptr("First stable"),
+			TargetCommitish: ShaB,
+			Prerelease:      false,
+			CreatedAt:       gh.Timestamp{Time: t0.Add(40 * time.Hour)},
+			PublishedAt:     tst(t0.Add(41 * time.Hour)),
+		},
+		&gh.RepositoryRelease{
+			ID:              701,
+			TagName:         "v2.0.0-rc1",
+			Name:            strptr("Release candidate"),
+			TargetCommitish: "main",
+			Prerelease:      true,
+			CreatedAt:       gh.Timestamp{Time: t0.Add(42 * time.Hour)},
+			PublishedAt:     tst(t0.Add(43 * time.Hour)),
+		},
+	)
+}
+
 // FailFirstOrgCallOnce makes the first org call return a 403 rate-limit
 // response (the retry test).
 func (w *World) FailFirstOrgCallOnce() {
@@ -702,6 +734,12 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, []*gh.Deployment{})
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/releases"):
+		if r.URL.Path == "/repos/acme/widgets/releases" {
+			encode(rw, w.releases)
+			return
+		}
+		encode(rw, []*gh.RepositoryRelease{})
 	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/actions/runs"):
 		if r.URL.Path == "/repos/acme/widgets/actions/runs" {
 			encode(rw, &gh.WorkflowRuns{TotalCount: intptr(len(w.runs)), WorkflowRuns: w.runs})

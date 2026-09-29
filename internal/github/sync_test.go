@@ -273,6 +273,37 @@ func TestSyncDeployments(t *testing.T) {
 		"github.com:build:acme/widgets:200")
 }
 
+func TestSyncReleases(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddReleases()
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Release"]; got != (github.Count{New: 2}) {
+		t.Errorf("Release count = %+v, want 2 new", got)
+	}
+
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsRelease), knowledge.Outbound, 1,
+		"github.com:release:acme/widgets:700", "github.com:release:acme/widgets:701")
+
+	rel701, err := store.GetByExternalID(context.Background(), "github.com:release:acme/widgets:701")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prerelease := rel701.Properties["prerelease"]
+	if prerelease != true {
+		t.Errorf("release 701 prerelease = %v, want true (prerelease flag stored)", prerelease)
+	}
+}
+
 func TestSyncRun2Delta(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	store := knowledge.NewMemory()

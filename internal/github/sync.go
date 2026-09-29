@@ -262,6 +262,9 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		if err := s.syncDeployments(cfg.Owner, name); err != nil {
 			return nil, fmt.Errorf("github: sync deployments %s: %w", key, err)
 		}
+		if err := s.syncReleases(cfg.Owner, name, repoKoid); err != nil {
+			return nil, fmt.Errorf("github: sync releases %s: %w", key, err)
+		}
 	}
 
 	// Advance the checkpoint only after a fully successful run: a crash
@@ -731,6 +734,34 @@ func (s *syncer) syncDeployments(owner, repo string) error {
 			if err := s.relate(koid, depKoid, ontology.RelProduced); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// syncReleases ingests the repo's releases hanging off the repo with
+// CONTAINS_RELEASE. target_commitish stays a property — it is a branch or
+// tag name as often as a commit sha. Like deployments, not watermark-gated:
+// one short list call, idempotent upserts make re-listing free.
+func (s *syncer) syncReleases(owner, repo, repoKoid string) error {
+	rels, err := paginate(s.ctx, s.client, "releases.list", func(page int) ([]*gh.RepositoryRelease, *gh.Response, error) {
+		return s.client.gh.Repositories.ListReleases(s.ctx, owner, repo, &gh.ListOptions{PerPage: 100, Page: page})
+	})
+	if err != nil {
+		return err
+	}
+	for _, r := range rels {
+		relOnt := toRelease(r, owner, repo)
+		ko, err := relOnt.KnowledgeObject(ontology.NewProvenance(r.GetHTMLURL(), relOnt.PublishedAt))
+		if err != nil {
+			return err
+		}
+		relKoid, err := s.upsert(ko)
+		if err != nil {
+			return err
+		}
+		if err := s.relate(repoKoid, relKoid, ontology.RelContainsRelease); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -35,6 +35,29 @@ func TestToDeployment(t *testing.T) {
 	}
 }
 
+// Roadmap Milestone C: releases normalize to Release objects carrying the
+// tag and its target; target_commitish stays a property (it is a branch or
+// tag name as often as a sha — never assumed to be a commit).
+func TestToRelease(t *testing.T) {
+	created := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	got := toRelease(&gh.RepositoryRelease{
+		ID:              700,
+		TagName:         "v1.0.0",
+		Name:            strptr("First stable"),
+		TargetCommitish: "main",
+		Prerelease:      false,
+		CreatedAt:       gh.Timestamp{Time: created},
+		PublishedAt:     tst(created.Add(time.Hour)),
+	}, "acme", "widgets")
+	if got.Repository != "acme/widgets" || got.ID != 700 || got.TagName != "v1.0.0" ||
+		got.Name != "First stable" || got.TargetCommitish != "main" || got.Prerelease {
+		t.Fatalf("toRelease fields = %+v", got)
+	}
+	if !got.CreatedAt.Equal(created) || !got.PublishedAt.Equal(created.Add(time.Hour)) {
+		t.Fatalf("toRelease times = %v / %v", got.CreatedAt, got.PublishedAt)
+	}
+}
+
 func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
 func strptr(s string) *string       { return &s }
 func int64ptr(i int64) *int64       { return &i }

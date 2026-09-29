@@ -201,6 +201,16 @@ Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontolo
 - `TestToDeployment` pins the mapping (incl. toService); `TestSyncDeployments` pins the two-edge graph (dep300 → build 200 over PRODUCED, → production over AFFECTS), the no-build-sha silence (dep301 at DeadSha leaves no PRODUCED edge), and the run-2 leg: dep302 at ShaB links through the store to build 200 (watermark-skipped in run 2), zero extra API calls. The Milestone C exit graph Build → Deployment → Service reconstructs.
 - Board and GET /metrics stay unchanged (7 definitions).
 
+## Releases (item 41, post-contract — roadmap Milestone C)
+
+Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/ontology` (`rels.go`).
+
+- The sync now ingests each repo's releases (`repos/{repo}/releases`) as `ontology.Release` (id, tag_name, name, target_commitish, prerelease, created/published_at) hanging off the repo with CONTAINS_RELEASE (Repository → Release) — the roadmap's target graph has no further edge contract for releases.
+- `target_commitish` stays a property, never an edge: it is a branch or tag name as often as a commit sha (`TestToRelease` pins the mapping with a branch-name target).
+- Like deployments, releases are not watermark-gated — one short list call, idempotent upserts make re-listing free.
+- `TestSyncReleases` — two releases (stable + prerelease; the prerelease flag stores verbatim) and the repo reaches both over CONTAINS_RELEASE. Milestone C's full exit graph PR → Build → Deployment → Service reconstructs (HAS_BUILD → PRODUCED → AFFECTS).
+- Board and GET /metrics stay unchanged (7 definitions).
+
 ## Commit ↔ PR links (item 38, post-contract — roadmap Milestone B)
 
 Suite: `internal/github` (`sync_test.go`), `internal/ontology` (`rels.go`).

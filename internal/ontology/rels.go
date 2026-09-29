@@ -95,6 +95,12 @@ package ontology
 //	                cardinality: N:M
 //	                test: TestSyncDeployments
 //
+//	CONTAINS_RELEASE source Repository → target Release
+//	                meaning: the release was cut from the repo
+//	                inverse: released in repo (inbound traversal)
+//	                cardinality: 1:N
+//	                test: TestSyncReleases
+//
 //	RESOLVES_TO     source SourceIdentity → target Engineer
 //	                meaning: this source identity is that canonical engineer;
 //	                identity-layer edge, never a source-domain fact
@@ -120,9 +126,10 @@ const (
 	RelMergedAs        RelType = "MERGED_AS"
 	RelContainsReview  RelType = "CONTAINS_REVIEW"
 	RelContainsBuild   RelType = "CONTAINS_BUILD"
-	RelHasBuild        RelType = "HAS_BUILD" // PullRequest → Build; outcome lives on the Build
-	RelProduced        RelType = "PRODUCED"  // Build → Deployment; sha association, never causation
-	RelAffects         RelType = "AFFECTS"   // Deployment → Service
+	RelHasBuild        RelType = "HAS_BUILD"        // PullRequest → Build; outcome lives on the Build
+	RelProduced        RelType = "PRODUCED"         // Build → Deployment; sha association, never causation
+	RelAffects         RelType = "AFFECTS"          // Deployment → Service
+	RelContainsRelease RelType = "CONTAINS_RELEASE" // Repository → Release
 	RelResolvesTo      RelType = "RESOLVES_TO"
 	RelAIContributes   RelType = "AI_CONTRIBUTES"
 )

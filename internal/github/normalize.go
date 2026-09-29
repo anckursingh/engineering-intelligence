@@ -108,6 +108,19 @@ func toService(owner, repo, env string) ontology.Service {
 	return ontology.Service{Repository: repoRef(owner, repo), Name: env}
 }
 
+func toRelease(r *gh.RepositoryRelease, owner, repo string) ontology.Release {
+	return ontology.Release{
+		Repository:      repoRef(owner, repo),
+		ID:              r.GetID(),
+		TagName:         r.GetTagName(),
+		Name:            r.GetName(),
+		TargetCommitish: r.GetTargetCommitish(),
+		Prerelease:      r.GetPrerelease(),
+		CreatedAt:       ts(r.GetCreatedAt()),
+		PublishedAt:     ts(r.GetPublishedAt()),
+	}
+}
+
 func toCommit(c *gh.RepositoryCommit, owner, repo string) ontology.Commit {
 	comm := c.GetCommit() // nil if GitHub could not resolve the commit object
 	var name, email, message string

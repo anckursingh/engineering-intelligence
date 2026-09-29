@@ -51,6 +51,9 @@ func DeploymentExternalID(owner, repo string, id int64) string {
 func ServiceExternalID(owner, repo, env string) string {
 	return fmt.Sprintf("github.com:service:%s/%s:%s", owner, repo, env)
 }
+func ReleaseExternalID(owner, repo string, id int64) string {
+	return fmt.Sprintf("github.com:release:%s/%s:%d", owner, repo, id)
+}
 
 // NewProvenance carries the source-side facts every knowledge object keeps
 // (AC-KG-004). Run-scoped fields (ObservedAt, IngestionRun) are the
@@ -147,4 +150,9 @@ func (d Deployment) KnowledgeObject(prov knowledge.Provenance) (knowledge.Knowle
 func (svc Service) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
 	owner, repo, _ := strings.Cut(svc.Repository, "/")
 	return toKnowledgeObject("Service", ServiceExternalID(owner, repo, svc.Name), svc, prov)
+}
+
+func (r Release) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	owner, repo, _ := strings.Cut(r.Repository, "/")
+	return toKnowledgeObject("Release", ReleaseExternalID(owner, repo, r.ID), r, prov)
 }
