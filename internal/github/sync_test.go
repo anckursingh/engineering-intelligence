@@ -106,6 +106,25 @@ func TestSyncUserOwner(t *testing.T) {
 	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelBelongsTo), knowledge.Outbound, 1, "github.com:account:acme")
 }
 
+// TestSyncSkipsEmptyRepo: an empty repository makes GitHub's commits
+// endpoint answer 409 "Git Repository is empty" instead of an empty list;
+// the sync treats it as zero commits and keeps going.
+func TestSyncSkipsEmptyRepo(t *testing.T) {
+	w := githubtest.NewUserWorld(t)
+	w.AddEmptyRepo("vacant")
+	store := knowledge.NewMemory()
+	res, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Repository"]; got != (github.Count{New: 2}) {
+		t.Errorf("Repository count = %+v, want 2 (the empty repo itself is synced)", got)
+	}
+	if got := res.Counts["Commit"]; got != (github.Count{New: 2}) {
+		t.Errorf("Commit count = %+v, want 2 (the empty repo contributes none)", got)
+	}
+}
+
 func TestSyncRun2Delta(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	store := knowledge.NewMemory()

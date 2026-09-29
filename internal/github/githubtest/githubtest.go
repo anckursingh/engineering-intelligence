@@ -59,6 +59,7 @@ type World struct {
 	failOrg        bool
 	orgCalls       int
 	issueListCalls int
+	emptyRepos     map[string]bool // commits endpoint answers GitHub's real 409 for these
 
 	server *httptest.Server
 }
@@ -240,6 +241,28 @@ func (w *World) AddDeltaActivity() {
 	})
 }
 
+// AddEmptyRepo appends a repo whose commits endpoint answers GitHub's real
+// 409 "Git Repository is empty" (the API returns it instead of an empty
+// list).
+func (w *World) AddEmptyRepo(name string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.emptyRepos == nil {
+		w.emptyRepos = map[string]bool{}
+	}
+	w.emptyRepos[name] = true
+	w.repos = append(w.repos, &gh.Repository{
+		Name:          strptr(name),
+		FullName:      strptr("acme/" + name),
+		Owner:         &gh.User{Login: strptr("acme")},
+		DefaultBranch: strptr("main"),
+		HTMLURL:       strptr("https://github.com/acme/" + name),
+		CreatedAt:     w.org.CreatedAt,
+		UpdatedAt:     w.org.UpdatedAt,
+		PushedAt:      w.org.UpdatedAt,
+	})
+}
+
 // AddMergeVariants appends the §13.3 merge-kind PRs: #4 squash merge, #5
 // rebase merge (both land their commit on the default branch), #6 a merged
 // PR whose merge SHA is not in branch history.
@@ -392,15 +415,34 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, w.repos)
-	case r.URL.Path == "/repos/acme/widgets/commits":
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/commits"):
+		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/acme/"), "/commits")
+		if w.emptyRepos[name] {
+			rw.WriteHeader(http.StatusConflict)
+			if err := json.NewEncoder(rw).Encode(map[string]any{
+				"message":           "Git Repository is empty.",
+				"documentation_url": "https://docs.github.com/rest/commits/commits",
+			}); err != nil {
+				panic(err) // test server: no recovery needed
+			}
+			return
+		}
 		encode(rw, w.commits)
-	case r.URL.Path == "/repos/acme/widgets/issues":
-		w.issueListCalls++
-		encode(rw, w.issues)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/issues"):
+		if r.URL.Path == "/repos/acme/widgets/issues" {
+			w.issueListCalls++
+			encode(rw, w.issues)
+			return
+		}
+		encode(rw, []*gh.Issue{}) // other repos: empty (like the real API)
 	case r.URL.Path == "/repos/acme/widgets/issues/1":
 		encode(rw, w.issue1)
-	case r.URL.Path == "/repos/acme/widgets/pulls":
-		encode(rw, w.prs)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/pulls"):
+		if r.URL.Path == "/repos/acme/widgets/pulls" {
+			encode(rw, w.prs)
+			return
+		}
+		encode(rw, []*gh.PullRequest{})
 	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/pulls/") && strings.HasSuffix(r.URL.Path, "/reviews"):
 		if r.URL.Path == "/repos/acme/widgets/pulls/3/reviews" {
 			encode(rw, w.reviews)

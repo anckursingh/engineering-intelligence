@@ -294,6 +294,16 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 			})
 		})
 		if err != nil {
+			// GitHub answers commits.list on an empty repository with 409
+			// "Git Repository is empty" instead of an empty list: nothing to
+			// sync, and commits pushed later are picked up next run (the
+			// checkpoint head stays "").
+			var ghErr *gh.ErrorResponse
+			if page == 1 && errors.As(err, &ghErr) && ghErr.Response != nil &&
+				ghErr.Response.StatusCode == http.StatusConflict &&
+				strings.Contains(ghErr.Message, "Git Repository is empty") {
+				return nil
+			}
 			return err
 		}
 		if page == 1 {
