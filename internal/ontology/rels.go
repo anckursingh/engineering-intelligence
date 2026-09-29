@@ -54,8 +54,10 @@ package ontology
 //	                cardinality: 1:N
 //	                test: TestSyncCI + TestPopulationFromScope
 //
-//	PASSED          source PullRequest → target Build
-//	                meaning: the run was triggered by (and covers) the PR
+//	HAS_BUILD       source PullRequest → target Build
+//	                meaning: the run covers the PR — the edge never claims an
+//	                outcome; a run's success or failure lives on the Build's
+//	                conclusion, not on the edge
 //	                inverse: builds covering the PR (inbound traversal)
 //	                cardinality: N:M
 //	                test: TestSyncCI
@@ -83,7 +85,7 @@ const (
 	RelMergedAs       RelType = "MERGED_AS"
 	RelContainsReview RelType = "CONTAINS_REVIEW"
 	RelContainsBuild  RelType = "CONTAINS_BUILD"
-	RelPassed         RelType = "PASSED" // PullRequest → Build
+	RelHasBuild       RelType = "HAS_BUILD" // PullRequest → Build; outcome lives on the Build
 	RelResolvesTo     RelType = "RESOLVES_TO"
 	RelAIContributes  RelType = "AI_CONTRIBUTES"
 )

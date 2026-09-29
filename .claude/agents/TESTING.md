@@ -61,7 +61,7 @@ Every persisted relationship type is a data contract — do not rename casually.
 | AUTHORED / IMPLEMENTS / TARGETS / REVIEWED_BY | unchanged | — |
 
 | CONTAINS_BUILD | Repository → Build | new — the CI fetch's repo→run edge |
-| PASSED | PullRequest → Build | was "reserved until Build fetch lands" — landed with the CI fetch |
+| HAS_BUILD | PullRequest → Build | replaced PASSED — the edge carries no outcome; the conclusion lives on the Build |
 
 ## Connector hardening (§13)
 
@@ -173,9 +173,9 @@ Suite: `internal/intelligence` (`board_test.go`; Memory + live AikoqlStore).
 
 Suite: `internal/github` (`normalize_test.go`, `sync_test.go`), `internal/metrics` (`ci_test.go`), `internal/intelligence` (`population_test.go`, `board_test.go`; Memory + live AikoqlStore).
 
-- The GitHub sync now fetches workflow runs per repo (`Actions.ListRepositoryWorkflowRuns` — the v92 name; the real API wraps them in a `workflow_runs` envelope, not a bare array) as the long-reserved `ontology.Build` objects, then CI-watermarks, upserts, and edges them: `CONTAINS_BUILD` (repo → run) and `PASSED` (PR → run, resolved from the run's own `pull_requests` array — a PR the sync has never seen yields no edge, the run still stores).
+- The GitHub sync now fetches workflow runs per repo (`Actions.ListRepositoryWorkflowRuns` — the v92 name; the real API wraps them in a `workflow_runs` envelope, not a bare array) as the long-reserved `ontology.Build` objects, then CI-watermarks, upserts, and edges them: `CONTAINS_BUILD` (repo → run) and `HAS_BUILD` (PR → run, resolved from the run's own `pull_requests` array — a PR the sync has never seen yields no edge, the run still stores). HAS_BUILD deliberately replaces the first draft's `PASSED` (roadmap §3.1): a workflow associated with a PR can still fail, so the edge never claims an outcome — a failed run linked to a PR is still HAS_BUILD, and the conclusion lives on the Build.
 - `TestToBuild` — the list endpoint carries no completed_at: a completed run's updated_at stands for completion (GitHub stops touching the record once a run finishes) and an in-progress run's CompletedAt stays zero so its advancing updated_at re-passes the watermark and flips when it finishes.
-- `TestSyncCI` — run 1: counts `{Build: {New: 3}}`, repo→CONTAINS_BUILD outbound reaches all 3, PR#3→PASSED outbound reaches the success build; run 2 after `FinishInProgressBuild`: `{Updated: 1, Skipped: 2}` (the finished run re-normalizes; the settled ones watermark-skip).
+- `TestSyncCI` — run 1: counts `{Build: {New: 4}}` (success, failure, in-progress, cancelled — the outcome-vocabulary AC needs every conclusion), repo→CONTAINS_BUILD outbound reaches all 4, PR#3→HAS_BUILD outbound reaches the success build; run 2 after `FinishInProgressBuild`: `{Updated: 1, Skipped: 3}` (the finished run re-normalizes; the settled ones watermark-skip). Stale `PASSED` edges in a pre-rename db are inert — nothing reads them.
 - `ci_pass_rate` (new candidate, so the board's Quality section and GET /metrics both grew): success / verdict runs × 100 where a verdict is success|failure|timed_out — cancelled/skipped runs never tested the code and a conclusion-less run is unclassifiable, so neither counts (`TestCIPassRateExact` — 2 success + 1 failure + 1 timed_out + 1 cancelled → 50.0, the 4 verdict builds cited; `TestCIPassRateExcludesNoVerdict`; `TestCIPassRateAbsence` — empty/out-of-window/only-cancelled → nil, silence is not zero). Anchored at completed_at (§19), CALCULATED with every counted Build in evidence.
 - Board: Quality carries ci_pass_rate when builds exist (`TestBoardQualityWithCI` — 3 success + 1 failure → 75.0 %) and the honest note otherwise; the population walk traverses CONTAINS_BUILD outbound (pinned in `TestPopulationFromScope`).
 

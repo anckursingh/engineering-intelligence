@@ -332,7 +332,8 @@ func (w *World) AddLinkVariants() {
 }
 
 // AddBuilds appends the CI fixture: one passed PR-linked run, one failed run,
-// one in-progress run (t0 = now − 10d, matching NewWorld's clock).
+// one in-progress run, one cancelled run (t0 = now − 10d, matching
+// NewWorld's clock) — the outcome-vocabulary tests need every conclusion.
 func (w *World) AddBuilds() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -367,6 +368,16 @@ func (w *World) AddBuilds() {
 			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/202"),
 			RunStartedAt: tst(t0.Add(36 * time.Hour)),
 			UpdatedAt:    tst(t0.Add(36 * time.Hour)),
+		},
+		&gh.WorkflowRun{
+			ID:           int64ptr(203),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("completed"),
+			Conclusion:   strptr("cancelled"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/203"),
+			RunStartedAt: tst(t0.Add(37 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(37 * time.Hour)),
 		},
 	)
 }

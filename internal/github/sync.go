@@ -540,7 +540,8 @@ func (s *syncer) syncReviews(owner, repo string, prKoid string, prNumber int) er
 }
 
 // syncCI fetches the repo's workflow runs as Build objects, hanging off the
-// repo (CONTAINS_BUILD) and off the PRs the API links them to (PASSED).
+// repo (CONTAINS_BUILD) and off the PRs the API links them to (HAS_BUILD —
+// the edge carries no outcome; conclusion lives on the Build).
 // Incrementality is the same client-side watermark as issues/PRs: a run's
 // updated_at advances while it progresses, and freezes once it completes.
 // ponytail: the full list is fetched each run like every other entity — a
@@ -588,7 +589,7 @@ func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error
 				}
 				return fmt.Errorf("github: lookup PR for build link: %w", err)
 			}
-			if err := s.relate(prKO.Koid, buildKoid, ontology.RelPassed); err != nil {
+			if err := s.relate(prKO.Koid, buildKoid, ontology.RelHasBuild); err != nil {
 				return err
 			}
 		}

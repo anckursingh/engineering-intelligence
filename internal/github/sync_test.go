@@ -340,9 +340,11 @@ func TestPRToIssueLinks(t *testing.T) {
 }
 
 // TestSyncCI: workflow runs normalize to Build objects hanging off the repo
-// (CONTAINS_BUILD), runs the API links to PRs get the PASSED edge, and the
+// (CONTAINS_BUILD), runs the API links to PRs get the HAS_BUILD edge, and the
 // second run gates on the watermark — completed earlier runs skip, the
-// finished in-progress run updates.
+// finished in-progress run updates. The edge never claims an outcome: a
+// failed run linked to a PR is still HAS_BUILD (the conclusion lives on the
+// Build).
 func TestSyncCI(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	w.AddBuilds()
@@ -353,12 +355,12 @@ func TestSyncCI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := res.Counts["Build"]; got != (github.Count{New: 3}) {
-		t.Errorf("Build count = %+v, want 3 new", got)
+	if got := res.Counts["Build"]; got != (github.Count{New: 4}) {
+		t.Errorf("Build count = %+v, want 4 new", got)
 	}
-	// base 9 relationships + 3 CONTAINS_BUILD + 1 PASSED (run 200 links PR #3)
-	if res.Relationships != 13 {
-		t.Errorf("relationships = %d, want 13", res.Relationships)
+	// base 9 relationships + 4 CONTAINS_BUILD + 1 HAS_BUILD (run 200 links PR #3)
+	if res.Relationships != 14 {
+		t.Errorf("relationships = %d, want 14", res.Relationships)
 	}
 
 	build, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:200")
@@ -373,21 +375,21 @@ func TestSyncCI(t *testing.T) {
 		t.Fatal(err)
 	}
 	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsBuild), knowledge.Outbound, 1,
-		"github.com:build:acme/widgets:200", "github.com:build:acme/widgets:201", "github.com:build:acme/widgets:202")
+		"github.com:build:acme/widgets:200", "github.com:build:acme/widgets:201", "github.com:build:acme/widgets:202", "github.com:build:acme/widgets:203")
 	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelPassed), knowledge.Outbound, 1, "github.com:build:acme/widgets:200")
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelHasBuild), knowledge.Outbound, 1, "github.com:build:acme/widgets:200")
 
-	// between runs: run 202 completes; runs 200/201 predate the watermark
+	// between runs: run 202 completes; runs 200/201/203 predate the watermark
 	w.FinishInProgressBuild()
 	res2, err := github.Sync(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := res2.Counts["Build"]; c != (github.Count{Updated: 1, Skipped: 2}) {
-		t.Errorf("run2 Build = %+v, want updated 1 skipped 2", c)
+	if c := res2.Counts["Build"]; c != (github.Count{Updated: 1, Skipped: 3}) {
+		t.Errorf("run2 Build = %+v, want updated 1 skipped 3", c)
 	}
 	build202, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:202")
 	if err != nil {
