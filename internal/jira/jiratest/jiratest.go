@@ -23,10 +23,11 @@ import (
 // one delta issue. It serves its own httptest server and honors the
 // updated>="..." JQL boundary like the real search endpoint does.
 type World struct {
-	mu        sync.Mutex
-	issues    []wireIssue
-	jqls      []string // every jql seen, for assertions
-	serverURL string
+	mu         sync.Mutex
+	issues     []wireIssue
+	jqls       []string // every jql seen, for assertions
+	pageTokens []string // every incoming token, for assertions
+	serverURL  string
 }
 
 type wireIssue struct {
@@ -102,6 +103,13 @@ func (w *World) JQLs() []string {
 	return append([]string(nil), w.jqls...)
 }
 
+// PageTokens returns every enhanced-search cursor received by the fake Jira.
+func (w *World) PageTokens() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.pageTokens...)
+}
+
 // SyncConfig returns the jira.Config that talks to this world's server.
 func (w *World) SyncConfig(dir string, store knowledge.KnowledgeStore) jira.Config {
 	u, err := url.Parse(w.serverURL)
@@ -134,16 +142,29 @@ func parseWatermark(s string) (time.Time, error) {
 func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if r.URL.Path != "/rest/api/3/search" {
+	if r.URL.Path != "/rest/api/3/search/jql" {
 		http.NotFound(rw, r)
 		return
 	}
-	jql := r.URL.Query().Get("jql")
+	if r.Method != http.MethodPost {
+		http.Error(rw, "enhanced search requires POST", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		JQL           string `json:"jql"`
+		NextPageToken string `json:"nextPageToken"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(rw, "invalid search request", http.StatusBadRequest)
+		return
+	}
+	jql := request.JQL
 	w.jqls = append(w.jqls, jql)
-	issues := w.issues
+	w.pageTokens = append(w.pageTokens, request.NextPageToken)
+	issues := append([]wireIssue(nil), w.issues...)
 	if m := updatedRe.FindStringSubmatch(jql); m != nil {
 		if since, err := parseWatermark(m[1]); err == nil {
-			filtered := issues[:0]
+			filtered := make([]wireIssue, 0, len(issues))
 			for _, i := range issues {
 				upd, err := time.Parse(time.RFC3339, i.Fields.Updated)
 				if err == nil && !upd.Before(since) {
@@ -153,12 +174,29 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			issues = filtered
 		}
 	}
-	startAt := 0
+	start := 0
+	if request.NextPageToken != "" {
+		if request.NextPageToken != "next" {
+			http.Error(rw, "invalid next page token", http.StatusBadRequest)
+			return
+		}
+		start = 1
+	}
+	end := start + 1
+	if end > len(issues) {
+		end = len(issues)
+	}
+	isLast := end >= len(issues)
+	nextPageToken := ""
+	if !isLast {
+		nextPageToken = "next"
+	}
 	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(map[string]any{
-		"total":      len(issues),
-		"maxResults": 100,
-		"startAt":    startAt,
-		"issues":     issues,
-	})
+	if err := json.NewEncoder(rw).Encode(struct {
+		Issues        []wireIssue `json:"issues"`
+		NextPageToken string      `json:"nextPageToken,omitempty"`
+		IsLast        bool        `json:"isLast"`
+	}{Issues: issues[start:end], NextPageToken: nextPageToken, IsLast: isLast}); err != nil {
+		http.Error(rw, "could not encode search response", http.StatusInternalServerError)
+	}
 }

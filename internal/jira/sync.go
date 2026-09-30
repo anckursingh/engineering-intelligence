@@ -163,8 +163,9 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 	}
 	jql += " ORDER BY updated ASC"
 
-	for startAt := 0; ; {
-		page, err := client.search(ctx, jql, startAt)
+	seenPageTokens := map[string]struct{}{}
+	for nextPageToken := ""; ; {
+		page, err := client.search(ctx, jql, nextPageToken)
 		if err != nil {
 			return nil, err
 		}
@@ -173,11 +174,14 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 				return nil, err
 			}
 		}
-		next := startAt + len(page.Issues)
-		if len(page.Issues) == 0 || next >= page.Total {
+		if page.IsLast || page.NextPageToken == "" {
 			break
 		}
-		startAt = next
+		if _, seen := seenPageTokens[page.NextPageToken]; seen {
+			return nil, fmt.Errorf("jira: search repeated next page token %q", page.NextPageToken)
+		}
+		seenPageTokens[page.NextPageToken] = struct{}{}
+		nextPageToken = page.NextPageToken
 	}
 
 	ck.Jira.UpdatedSince = run.StartedAt

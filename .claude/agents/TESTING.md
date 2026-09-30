@@ -83,6 +83,7 @@ Suite: `internal/jira` (unit, external package via `jiratest`) + acceptance AC-I
 
 - `TestJiraSyncRun1Full` — canonical mapping: TypeName "Issue"/"Epic" by issuetype, extID `jira.com:<site-host>:issue:<KEY>` (port excluded — test-server ports must never leak into identity), provenance Source "jira" + run-stamped IngestionRun, checkpoint watermark advanced, one run record.
 - `TestJiraSyncRun2Delta` — incrementality is the JQL itself: run2's query carries `updated >= "<minute-truncated watermark>"`, the fake world honors the boundary in both date formats (classic `2006/01/02 15:04` and RFC3339), so only the delta issue lands; unchanged rerun = zero counts (AC-ING-005); delta issue resolvable.
+- Enhanced search uses `POST /rest/api/3/search/jql` and follows `nextPageToken` through the final page; `TestSearchUsesEnhancedJQLRequest` and the two-page fake sync pin request and cursor behavior.
 - `TestLoadCorruptFailsLoudly` (checkpoint) — corrupt checkpoint errors, never silently reset (both connectors share the file now).
 - Wire time formats: Jira classic `2006-01-02T15:04:05.000-0700` and RFC3339 (fake world serves the latter).
 

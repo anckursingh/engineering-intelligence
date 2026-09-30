@@ -1,12 +1,12 @@
 package jira
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 )
 
@@ -41,10 +41,16 @@ func (c *Client) Site() string { return c.base.Hostname() }
 // wireIssue/searchPage mirror the REST v3 search response shape (§14: the
 // Jira schema stays wire-level; ontology owns the canonical mapping).
 type searchPage struct {
-	Total      int         `json:"total"`
-	MaxResults int         `json:"maxResults"`
-	StartAt    int         `json:"startAt"`
-	Issues     []wireIssue `json:"issues"`
+	Issues        []wireIssue `json:"issues"`
+	NextPageToken string      `json:"nextPageToken"`
+	IsLast        bool        `json:"isLast"`
+}
+
+type searchRequest struct {
+	JQL           string   `json:"jql"`
+	MaxResults    int      `json:"maxResults"`
+	Fields        []string `json:"fields"`
+	NextPageToken string   `json:"nextPageToken,omitempty"`
 }
 
 type wireIssue struct {
@@ -70,21 +76,25 @@ type wireUser struct {
 	EmailAddress string `json:"emailAddress"`
 }
 
-// search fetches one page of the issue search. ponytail: no retry — Jira
-// 429s are rare at this scale; add backoff when a real org hits them.
-func (c *Client) search(ctx context.Context, jql string, startAt int) (*searchPage, error) {
-	u := c.base.JoinPath("rest", "api", "3", "search")
-	q := url.Values{}
-	q.Set("jql", jql)
-	q.Set("maxResults", "100")
-	q.Set("startAt", strconv.Itoa(startAt))
-	q.Set("fields", "key,summary,status,issuetype,created,updated,reporter,assignee")
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+// search fetches one page from Jira Cloud's enhanced JQL endpoint. ponytail:
+// no retry — Jira 429s are rare at this scale; add backoff when a real org hits them.
+func (c *Client) search(ctx context.Context, jql, nextPageToken string) (*searchPage, error) {
+	u := c.base.JoinPath("rest", "api", "3", "search", "jql")
+	payload, err := json.Marshal(searchRequest{
+		JQL:           jql,
+		MaxResults:    100,
+		Fields:        []string{"key", "summary", "status", "issuetype", "created", "updated", "reporter", "assignee"},
+		NextPageToken: nextPageToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("jira: encode search request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("jira: build search request: %w", err)
 	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(c.email, c.token)
 	res, err := c.http.Do(req)
 	if err != nil {
