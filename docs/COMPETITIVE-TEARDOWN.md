@@ -207,3 +207,46 @@ Decisions to force this quarter:
 - [total-agent-memory vs the field (April 2026)](https://raw.githubusercontent.com/vbcherepanov/total-agent-memory/refs/tags/v12.1.0/docs/vs-competitors.md)
 - [Atlan: Enterprise Memory for AI Agents — The Governed Substrate](https://atlan.com/know/what-is-enterprise-memory/)
 - [GitKraken: 8 Secure Engineering Intelligence Platforms for Git Oversight (2026)](https://www.gitkraken.com/blog/8-secure-engineering-intelligence-platforms-for-git-oversight-2026)
+
+## 7. Positioning check — 2026-09-30
+
+The market now overlaps with several parts of the proposed wedge. Jellyfish
+markets AI spend and outcome measurement across delivery, quality, and
+productivity; LinearB markets AI impact, delivery, quality, health, and
+engineering cost reporting; Swarmia AI answers questions about trends and root
+causes using a model spanning code, issue tracking, AI tools, and HR; DX's AI
+impact report combines cohort comparisons, adoption, self-reported savings,
+and lifecycle metrics. These are vendor descriptions, not independent evidence
+that the products deliver equivalent answer quality.
+
+Sources: [Jellyfish AI Impact](https://jellyfish.co/platform/jellyfish-ai-impact/),
+[LinearB](https://linearb.io/), [Swarmia AI](https://www.swarmia.com/product/swarmia-ai/),
+[DX AI impact](https://docs.getdx.com/reports/ai-impact/). Recheck before using
+this snapshot in external materials.
+
+This narrows the claim we should test. “Unified engineering data,” “AI impact,”
+and “ask questions about engineering” are not defensible positioning by
+themselves. The candidate difference is that a user can inspect the source
+records behind an answer, see which parts are observations versus calculations
+or hypotheses, and understand what missing data prevents a stronger conclusion.
+The current POC implements pieces of that model; no customer evidence yet
+shows that buyers value it enough to choose this product.
+
+### Required proof before claiming differentiation
+
+In the design-partner evaluation, compare the same real engineering question
+with the participant's current workflow and, if available, their incumbent
+analytics product. Record:
+
+- time to a checked answer, including data setup and manual joins;
+- whether the participant can verify each material claim from cited records;
+- corrections, unsupported claims, and uncertainty the participant considers
+  important;
+- whether the result changed or supported a concrete team-level decision;
+- whether the participant would use this workflow again and what they would
+  replace or add it to.
+
+The initial wedge should remain investigations of engineering work and agent
+outcomes with auditable evidence. Do not market general AI ROI measurement or
+generic engineering chat as the differentiator. Treat a failed evaluation as a
+reason to revise the wedge, not to add connectors or more dashboard metrics.
