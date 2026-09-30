@@ -48,13 +48,14 @@ type Interaction struct {
 
 // AgentRun is one agent invocation: started, ended, status, cost.
 type AgentRun struct {
-	Source    string    `json:"source"`
-	ID        string    `json:"id"`
-	Agent     string    `json:"agent"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at,omitempty"`
-	Status    string    `json:"status"` // completed | failed
-	CostUSD   float64   `json:"cost_usd,omitempty"`
+	Source       string    `json:"source"`
+	ID           string    `json:"id"`
+	Agent        string    `json:"agent"`
+	StartedAt    time.Time `json:"started_at"`
+	EndedAt      time.Time `json:"ended_at,omitempty"`
+	Status       string    `json:"status"` // completed | failed
+	CostUSD      float64   `json:"cost_usd,omitempty"`
+	CostReported bool      `json:"cost_reported,omitempty"` // explicit zero is distinct from unavailable cost
 }
 
 // AgentTask is one unit of work inside a run. Retries and human

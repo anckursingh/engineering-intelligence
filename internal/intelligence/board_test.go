@@ -1,4 +1,4 @@
-// Product board tests (§28): one response with the doc's five sections.
+// Product board tests (§28): one response with core metrics and work management.
 // Empty sections are honest notes, never fabricated numbers; the board
 // carries no per-person data, so individual ranking is impossible by
 // construction.
@@ -15,6 +15,7 @@ import (
 
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge/aikoqltest"
+	"github.com/anckursingh/engineering-intelligence/internal/metrics"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
@@ -34,8 +35,8 @@ func TestBoardSections(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	// §28's five sections, in doc order.
-	wantTitles := []string{"Engineering Flow", "Quality", "Reliability", "AI Development", "Evidence Coverage"}
+	// §28's core sections plus Work Management, in display order.
+	wantTitles := []string{"Engineering Flow", "Quality", "Reliability", "AI Development", "Evidence Coverage", "Work Management"}
 	if len(got.Sections) != len(wantTitles) {
 		t.Fatalf("sections = %d, want %d", len(got.Sections), len(wantTitles))
 	}
@@ -48,8 +49,8 @@ func TestBoardSections(t *testing.T) {
 	// Month B of the §23 fixture: cycle time 4.0, review latency 2.0,
 	// throughput 2 — each with calculated evidence.
 	flow := got.Sections[0]
-	if len(flow.Items) != 3 {
-		t.Fatalf("flow items = %d, want 3", len(flow.Items))
+	if len(flow.Items) != 4 {
+		t.Fatalf("flow items = %d, want 4 including review cycles", len(flow.Items))
 	}
 	byMetric := map[string]boardItem{}
 	for _, it := range flow.Items {
@@ -95,6 +96,152 @@ func TestBoardSections(t *testing.T) {
 	}
 }
 
+func TestBoardJiraProjectScope(t *testing.T) {
+	ctx := context.Background()
+	store := knowledge.NewMemory()
+	projectID := "jira.com:example.atlassian.net:project:SCRUM"
+	project, err := store.Upsert(ctx, knowledge.KnowledgeObject{
+		TypeName: "JiraProject", ExternalID: projectID, Properties: map[string]any{"key": "SCRUM"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := store.Upsert(ctx, knowledge.KnowledgeObject{
+		TypeName: "Issue", ExternalID: "jira.com:example.atlassian.net:issue:SCRUM-1",
+		Properties: map[string]any{"key": "SCRUM-1", "summary": "test", "status": "In Progress", "project": "SCRUM"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sprint, err := store.Upsert(ctx, knowledge.KnowledgeObject{
+		TypeName: "Sprint", ExternalID: "jira.com:example.atlassian.net:sprint:7",
+		Properties: map[string]any{"name": "Sprint 1", "state": "active"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []knowledge.Relationship{
+		{Type: "CONTAINS_ISSUE", From: project.Koid, To: issue.Koid},
+		{Type: "IN_SPRINT", From: issue.Koid, To: sprint.Koid},
+	} {
+		if err := store.Relate(ctx, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := NewAPI(store)
+	url := "/board?scope=" + projectID + "&start=2026-09-01T00:00:00Z&end=2026-10-01T00:00:00Z"
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET Jira board = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got board
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var work boardSection
+	for _, section := range got.Sections {
+		if section.ID == "work_management" {
+			work = section
+		}
+	}
+	values := map[string]float64{}
+	for _, item := range work.Items {
+		values[item.Metric] = item.Value
+	}
+	if values["jira_issue_count"] != 1 || values["jira_sprint_memberships"] != 1 {
+		t.Errorf("work management values = %+v, want 1 issue and 1 sprint membership", values)
+	}
+}
+
+func TestBoardCompositeScopeCombinesSources(t *testing.T) {
+	ctx := context.Background()
+	store := knowledge.NewMemory()
+	seedInvestigationWorld(t, store)
+	project, err := store.Upsert(ctx, knowledge.KnowledgeObject{
+		TypeName: "JiraProject", ExternalID: "jira.com:example.atlassian.net:project:SCRUM",
+		Properties: map[string]any{"key": "SCRUM"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := store.Upsert(ctx, knowledge.KnowledgeObject{
+		TypeName: "Issue", ExternalID: "jira.com:example.atlassian.net:issue:SCRUM-1",
+		Properties: map[string]any{"key": "SCRUM-1", "summary": "test", "status": "In Progress", "project": "SCRUM", "issue_type": "Story"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Relate(ctx, knowledge.Relationship{Type: "CONTAINS_ISSUE", From: project.Koid, To: issue.Koid}); err != nil {
+		t.Fatal(err)
+	}
+	scope := "github.com:org:acme,jira.com:example.atlassian.net:project:SCRUM"
+	rec := httptest.NewRecorder()
+	api := NewAPI(store)
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/board?scope="+scope+"&start=2026-09-01T00:00:00Z&end=2026-10-01T00:00:00Z", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("composite board = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got board
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sections[0].Items) == 0 || got.Sections[5].Items[0].Value != 1 {
+		t.Fatalf("composite board lost a source: flow=%+v work=%+v", got.Sections[0], got.Sections[5])
+	}
+	foundJiraEvidence := false
+	for _, item := range got.Sections[4].Items {
+		for _, ev := range item.Evidence {
+			for _, id := range ev.ObjectIDs {
+				if id == issue.ExternalID {
+					foundJiraEvidence = true
+				}
+			}
+		}
+	}
+	if !foundJiraEvidence {
+		t.Fatal("evidence coverage omitted Jira objects")
+	}
+}
+
+func TestBoardIncludesEveryImplementedGitHubMetric(t *testing.T) {
+	created := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	merged := created.Add(24 * time.Hour)
+	pop := metrics.Population{
+		PullRequests: []metrics.Entity[ontology.PullRequest]{{ExternalID: "pr-1", Value: ontology.PullRequest{
+			Repository: "acme/widgets", Number: 1, Merged: true, CreatedAt: created, MergedAt: merged, Additions: 80, Deletions: 40,
+		}}},
+		Reviews: []metrics.Entity[ontology.Review]{{ExternalID: "review-1", Value: ontology.Review{
+			Repository: "acme/widgets", PRNumber: 1, State: "CHANGES_REQUESTED", SubmittedAt: created.Add(12 * time.Hour),
+		}}},
+	}
+	got := buildBoard(pop, metrics.Window{Start: created, End: merged.Add(time.Second)})
+	values := map[string]float64{}
+	for _, item := range got.Sections[0].Items {
+		values[item.Metric] = item.Value
+	}
+	if values["pr_size"] != 120 || values["review_cycles"] != 1 {
+		t.Fatalf("engineering flow metrics = %+v, want pr_size=120 and review_cycles=1", values)
+	}
+}
+
+func TestBoardReliabilityShowsDeploymentsAndReleases(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	pop := metrics.Population{
+		Deployments: []metrics.Entity[ontology.Deployment]{{ExternalID: "deployment-1", Value: ontology.Deployment{CreatedAt: start.Add(time.Hour)}}},
+		Releases:    []metrics.Entity[ontology.Release]{{ExternalID: "release-1", Value: ontology.Release{PublishedAt: start.Add(2 * time.Hour)}}},
+	}
+	got := buildBoard(pop, metrics.Window{Start: start, End: start.Add(24 * time.Hour)})
+	values := map[string]float64{}
+	for _, item := range got.Sections[2].Items {
+		values[item.Metric] = item.Value
+	}
+	if values["deployment_count"] != 1 || values["release_count"] != 1 {
+		t.Fatalf("reliability values = %+v, want one deployment and one release", values)
+	}
+}
+
 // TestBoardNoIndividualRanking: §28 forbids ranking developers — the board
 // carries no per-person data at all. (Structural check: no Engineer evidence
 // types, no identity keys, no ranking fields. The word "Engineering" would
@@ -127,7 +274,7 @@ func TestBoardNoIndividualRanking(t *testing.T) {
 	}
 }
 
-// TestBoardEmptyWindow: a window with no data yields the same five sections,
+// TestBoardEmptyWindow: a window with no data yields the same board sections,
 // with notes — the board never fabricates numbers.
 func TestBoardEmptyWindow(t *testing.T) {
 	store := knowledge.NewMemory()
@@ -143,8 +290,8 @@ func TestBoardEmptyWindow(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Sections) != 5 {
-		t.Fatalf("sections = %d, want 5", len(got.Sections))
+	if len(got.Sections) != 6 {
+		t.Fatalf("sections = %d, want 6", len(got.Sections))
 	}
 	if len(got.Sections[0].Items) != 0 || got.Sections[0].Note == "" {
 		t.Errorf("flow = %+v, want empty + note", got.Sections[0])
@@ -240,7 +387,7 @@ func TestBoardAIWorkflowMetrics(t *testing.T) {
 		id   string
 		cost float64
 	}{{"r1", 1.0}, {"r2", 2.0}} {
-		ko := upsert(t, store, mapKO(t, ontology.AgentRun{Source: "claude-code", ID: r.id, StartedAt: sep(2), Status: "completed", CostUSD: r.cost}.KnowledgeObject, prov))
+		ko := upsert(t, store, mapKO(t, ontology.AgentRun{Source: "claude-code", ID: r.id, StartedAt: sep(2), Status: "completed", CostUSD: r.cost, CostReported: true}.KnowledgeObject, prov))
 		relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsRun), From: session.Koid, To: ko.Koid})
 	}
 	// 4 finished tasks: 3 completed (one intervened), one failed with retries
@@ -301,6 +448,29 @@ func TestBoardAIWorkflowMetrics(t *testing.T) {
 	}
 }
 
+func TestBoardNotesWhenRunCostIsUnreported(t *testing.T) {
+	win := metrics.Window{Start: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	pop := metrics.Population{AgentRuns: []metrics.Entity[ontology.AgentRun]{{
+		ExternalID: "run-unknown-cost",
+		Value: ontology.AgentRun{
+			Source: "claude-code", ID: "run-unknown-cost", StartedAt: win.Start,
+		},
+	}, {
+		ExternalID: "run-known-cost",
+		Value: ontology.AgentRun{
+			Source: "other-ai-source", ID: "run-known-cost", StartedAt: win.Start, CostUSD: 3, CostReported: true,
+		},
+	}}}
+	got := buildBoard(pop, win)
+	ai := got.Sections[3]
+	if len(ai.Items) != 1 || ai.Items[0].Metric != "ai_run_volume" || ai.Items[0].Value != 2 {
+		t.Errorf("AI items = %+v, want run volume only; unreported cost is not zero", ai.Items)
+	}
+	if !strings.Contains(ai.Note, "cost is not reported for all runs") {
+		t.Errorf("AI note = %q, want explicit cost coverage gap", ai.Note)
+	}
+}
+
 // storeMust fetches a stored object by external id; test helper.
 func storeMust(t *testing.T, store knowledge.KnowledgeStore, extID string) knowledge.KnowledgeObject {
 	t.Helper()
@@ -325,7 +495,7 @@ func TestBoardLiveAikoql(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Sections) != 5 || got.Sections[0].Title != "Engineering Flow" {
+	if len(got.Sections) != 6 || got.Sections[0].Title != "Engineering Flow" {
 		t.Errorf("board = %+v", got.Sections)
 	}
 }

@@ -31,7 +31,7 @@ func contrib(extID string, prNum int, level ontology.AttributionLevel, source, e
 func run(extID string, started time.Time, cost float64) Entity[ontology.AgentRun] {
 	return Entity[ontology.AgentRun]{
 		ExternalID: extID,
-		Value:      ontology.AgentRun{Source: "claude-code", ID: extID, StartedAt: started, CostUSD: cost},
+		Value:      ontology.AgentRun{Source: "claude-code", ID: extID, StartedAt: started, CostUSD: cost, CostReported: true},
 	}
 }
 
@@ -193,6 +193,38 @@ func TestAICost(t *testing.T) {
 	none(t, AICost(Population{}, aiWin))
 }
 
+func TestAICostUnreportedIsAbsent(t *testing.T) {
+	pop := Population{AgentRuns: []Entity[ontology.AgentRun]{
+		{ExternalID: "r1", Value: ontology.AgentRun{
+			Source: "claude-code", ID: "r1", StartedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC),
+		}},
+	}}
+	none(t, AICost(pop, aiWin))
+}
+
+func TestAICostReportedZeroRemainsAnObservation(t *testing.T) {
+	zero := run("r1", time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC), 0)
+	oneValue(t, AICost(Population{AgentRuns: []Entity[ontology.AgentRun]{zero}}, aiWin), 0)
+}
+
+func TestAICostNonZeroLegacyValueIsMeasured(t *testing.T) {
+	legacy := Entity[ontology.AgentRun]{ExternalID: "r1", Value: ontology.AgentRun{
+		Source: "legacy-source", ID: "r1", StartedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC), CostUSD: 1.25,
+	}}
+	oneValue(t, AICost(Population{AgentRuns: []Entity[ontology.AgentRun]{legacy}}, aiWin), 1.25)
+}
+
+func TestAICostPartialCoverageIsAbsent(t *testing.T) {
+	unknown := Entity[ontology.AgentRun]{ExternalID: "r2", Value: ontology.AgentRun{
+		Source: "claude-code", ID: "r2", StartedAt: time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC),
+	}}
+	pop := Population{AgentRuns: []Entity[ontology.AgentRun]{
+		run("r1", time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC), 1.5),
+		unknown,
+	}}
+	none(t, AICost(pop, aiWin))
+}
+
 func TestCostPerCompletedTask(t *testing.T) {
 	pop := Population{
 		AgentRuns: []Entity[ontology.AgentRun]{
@@ -213,6 +245,16 @@ func TestCostPerCompletedTask(t *testing.T) {
 	none(t, CostPerCompletedTask(Population{
 		AgentTasks: pop.AgentTasks,
 	}, aiWin))
+}
+
+func TestCostPerCompletedTaskUnknownCostIsAbsent(t *testing.T) {
+	pop := Population{
+		AgentRuns: []Entity[ontology.AgentRun]{{ExternalID: "r1", Value: ontology.AgentRun{
+			Source: "claude-code", ID: "r1", StartedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC),
+		}}},
+		AgentTasks: []Entity[ontology.AgentTask]{task("t1", time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC), "completed", 0, false)},
+	}
+	none(t, CostPerCompletedTask(pop, aiWin))
 }
 
 // §18 timezone boundary: events are classified by instant, not wall clock.

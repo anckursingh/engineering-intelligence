@@ -60,6 +60,21 @@ func TestDashboardServed(t *testing.T) {
 	}
 }
 
+func TestDashboardDefaultScopeRedirect(t *testing.T) {
+	api := NewAPIWithDefaultScope(knowledge.NewMemory(), "jira.com:example.atlassian.net:project:SCRUM")
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/?scope=jira.com%3Aexample.atlassian.net%3Aproject%3ASCRUM" {
+		t.Fatalf("GET / = %d, Location %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?scope=custom", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("explicit scope GET / = %d, want 200", rec.Code)
+	}
+}
+
 func TestBoardCacheSecondRequestSkipsStore(t *testing.T) {
 	store := &countingStore{KnowledgeStore: knowledge.NewMemory()}
 	seedInvestigationWorld(t, store)

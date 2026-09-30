@@ -418,6 +418,28 @@ func (w *World) AddLinkVariants() {
 	w.prCloses[9] = []int{1}
 }
 
+// AddJiraMentionPR appends the Jira cross-linking fixture: PR #10's branch,
+// title, and body all carry the SCRUM-2 key — the signal the Jira-link pass
+// matches against ingested JiraIssue objects. No prDetails entry: the list
+// record serves the pullDetail fallback, exactly like AddLinkVariants.
+func (w *World) AddJiraMentionPR() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	w.prs = append(w.prs, &gh.PullRequest{
+		Number:    intptr(10),
+		Title:     strptr("Ship the launch — SCRUM-2"),
+		Body:      strptr("Solves SCRUM-2"),
+		State:     strptr("open"),
+		User:      &gh.User{Login: strptr("ann")},
+		Base:      &gh.PullRequestBranch{Ref: strptr("main")},
+		Head:      &gh.PullRequestBranch{Ref: strptr("SCRUM-2-aikoql-test")},
+		HTMLURL:   strptr("https://github.com/acme/widgets/pull/10"),
+		CreatedAt: tst(t0.Add(2 * time.Hour)),
+		UpdatedAt: tst(t0.Add(3 * time.Hour)),
+	})
+}
+
 // AddBuilds appends the CI fixture: one passed PR-linked run, one failed run,
 // one in-progress run, one cancelled run (t0 = now − 10d, matching
 // NewWorld's clock) — the outcome-vocabulary tests need every conclusion.

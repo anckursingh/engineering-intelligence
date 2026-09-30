@@ -239,6 +239,11 @@ func TestSyncDeployments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsDeployment), knowledge.Outbound, 1, dep300.ExternalID)
 	githubtest.AssertReaches(t, store, dep300.Koid, string(ontology.RelProduced), knowledge.Inbound, 1,
 		"github.com:build:acme/widgets:200")
 	githubtest.AssertReaches(t, store, dep300.Koid, string(ontology.RelAffects), knowledge.Outbound, 1,
@@ -534,6 +539,69 @@ func TestPRAuthoritativeIssueLinks(t *testing.T) {
 	}
 	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1,
 		"github.com:issue:acme/widgets#1")
+}
+
+// Jira cross-linking: a PR whose branch/title/body mention a Jira key links
+// to the ingested JiraIssue (IMPLEMENTS, same type as GitHub issues — both
+// normalize to the canonical Issue). A mention that resolves to no ingested
+// issue leaves no edge, so lookalike text can never fabricate one.
+func TestPRJiraIssueLinks(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddJiraMentionPR()
+	store := knowledge.NewMemory()
+
+	// The Jira side of the world: one ingested issue for the key PR #10
+	// mentions, one unrelated issue, one un-ingested lookalike key.
+	for _, issue := range []ontology.JiraIssue{
+		{Site: "acme.atlassian.net", Key: "SCRUM-2", Summary: "Ship the launch"},
+		{Site: "acme.atlassian.net", Key: "SCRUM-9", Summary: "Unrelated"},
+	} {
+		ko, err := issue.KnowledgeObject(ontology.NewJiraProvenance(
+			"https://acme.atlassian.net/browse/"+issue.Key, issue.UpdatedAt))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Upsert(context.Background(), ko); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := w.SyncConfig(t.TempDir(), store)
+	cfg.JiraSite = "acme.atlassian.net"
+	if _, err := github.Sync(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1,
+		"jira.com:acme.atlassian.net:issue:SCRUM-2")
+}
+
+// The Jira-link pass is opt-in: without cfg.JiraSite the connector must not
+// look up Jira issues at all (a Jira-synced db stays untouched).
+func TestPRJiraIssueLinksDisabled(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddJiraMentionPR()
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ko := range got {
+		if ko.ExternalID == "jira.com:acme.atlassian.net:issue:SCRUM-2" {
+			t.Errorf("Jira link written without cfg.JiraSite: %+v", ko)
+		}
+	}
 }
 
 // TestSyncCI: workflow runs normalize to Build objects hanging off the repo

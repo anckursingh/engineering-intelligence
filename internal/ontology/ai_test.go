@@ -51,7 +51,7 @@ func TestAITypesMap(t *testing.T) {
 		{"interaction", "Interaction", InteractionExternalID("claude-code", "i1"),
 			(Interaction{Source: "claude-code", ID: "i1", Agent: AgentExternalID("anthropic", "opus"), StartedAt: t0}).KnowledgeObject},
 		{"agent run", "AgentRun", AgentRunExternalID("claude-code", "r1"),
-			(AgentRun{Source: "claude-code", ID: "r1", Agent: AgentExternalID("anthropic", "opus"), StartedAt: t0, EndedAt: t0.Add(time.Hour), Status: "completed", CostUSD: 0.42}).KnowledgeObject},
+			(AgentRun{Source: "claude-code", ID: "r1", Agent: AgentExternalID("anthropic", "opus"), StartedAt: t0, EndedAt: t0.Add(time.Hour), Status: "completed", CostUSD: 0.42, CostReported: true}).KnowledgeObject},
 		{"agent task", "AgentTask", AgentTaskExternalID("claude-code", "t1"),
 			(AgentTask{Source: "claude-code", ID: "t1", Run: AgentRunExternalID("claude-code", "r1"), Description: "fix bug", Status: "completed", Retries: 1, HumanIntervention: true, CompletedAt: t0.Add(time.Hour)}).KnowledgeObject},
 		{"agent outcome", "AgentOutcome", AgentOutcomeExternalID("claude-code", "o1"),
@@ -96,6 +96,15 @@ func TestAITypesMap(t *testing.T) {
 	}
 	if back := roundTripAI[CodeContribution](t, contribKO); !reflect.DeepEqual(back, contrib) {
 		t.Errorf("contribution round trip = %+v, want %+v", back, contrib)
+	}
+
+	reportedZero := AgentRun{Source: "claude-code", ID: "zero", StartedAt: t0, CostReported: true}
+	zeroKO, err := reportedZero.KnowledgeObject(prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back := roundTripAI[AgentRun](t, zeroKO); !reflect.DeepEqual(back, reportedZero) {
+		t.Errorf("reported zero cost round trip = %+v, want %+v", back, reportedZero)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type Config struct {
 	Sleep          func(time.Duration)      // test seam; nil = real sleep
 	Store          knowledge.KnowledgeStore // nil = in-memory dev store
 	Tenant         string                   // optional: scopes the store to one tenant (§8)
+	JiraSite       string                   // optional Jira host: enables PR → Jira-issue links by key mention
 }
 
 // Count tallies one entity type over a run.
@@ -59,6 +61,7 @@ type syncer struct {
 
 	shaToCommit map[string]string // sha → commit koid (merge-commit lookup)
 	issueKoids  map[int]string    // issue number → koid, per repo
+	jiraSite    string            // cfg.JiraSite; empty disables PR → Jira-issue links
 
 	// Build→deployment sha links. Every listed run records here BEFORE the
 	// watermark gate (fresh and skipped alike): a deployment at a sha whose
@@ -164,6 +167,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		issueKoids:       map[int]string{},
 		buildRunIDsBySHA: map[string][]int64{},
 		buildKoids:       map[int64]string{},
+		jiraSite:         cfg.JiraSite,
 	}
 
 	// Owner account: the org endpoint first, the user endpoint on 404 —
@@ -259,7 +263,7 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		if err := s.syncCI(cfg.Owner, name, repoKoid, watermark); err != nil {
 			return nil, fmt.Errorf("github: sync CI runs %s: %w", key, err)
 		}
-		if err := s.syncDeployments(cfg.Owner, name); err != nil {
+		if err := s.syncDeployments(cfg.Owner, name, repoKoid); err != nil {
 			return nil, fmt.Errorf("github: sync deployments %s: %w", key, err)
 		}
 		if err := s.syncReleases(cfg.Owner, name, repoKoid); err != nil {
@@ -492,6 +496,9 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 		if err := s.syncPRIssues(owner, repo, prKoid, prOnt); err != nil {
 			return err
 		}
+		if err := s.syncPRJiraIssues(prKoid, prOnt); err != nil {
+			return err
+		}
 		if err := s.syncReviews(owner, repo, prKoid, prOnt.Number); err != nil {
 			return err
 		}
@@ -575,6 +582,42 @@ func (s *syncer) syncPRIssues(owner, repo, prKoid string, pr ontology.PullReques
 			s.issueKoids[num] = koid
 		}
 		if err := s.relate(prKoid, koid, ontology.RelImplements); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// jiraKeyPattern matches Jira issue keys mentioned in PR text: a project
+// prefix (letter, then letters/digits), a dash, and a number — SCRUM-2.
+// The pattern over-matches lookalike text such as UTF-8; that is harmless
+// because syncPRJiraIssues links only keys that resolve to an ingested
+// JiraIssue, so a bare mention never fabricates an edge.
+var jiraKeyPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]*-\d+\b`)
+
+// syncPRJiraIssues links a PR to the Jira issues its title, body, or branch
+// name mention by key (e.g. PR #8's branch "SCRUM-2-aikoql-…" vs Jira
+// SCRUM-2). Disabled without cfg.JiraSite; a key with no ingested JiraIssue
+// leaves no edge. IMPLEMENTS carries the link — Jira issues normalize to the
+// canonical Issue, so this is the same edge GitHub closing references use.
+func (s *syncer) syncPRJiraIssues(prKoid string, pr ontology.PullRequest) error {
+	if s.jiraSite == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, key := range jiraKeyPattern.FindAllString(pr.Title+"\n"+pr.Body+"\n"+pr.HeadRef, -1) {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		ko, err := s.store.GetByExternalID(s.ctx, ontology.JiraIssueExternalID(s.jiraSite, key))
+		if err != nil {
+			if errors.Is(err, knowledge.ErrNotFound) {
+				continue
+			}
+			return fmt.Errorf("github: lookup jira issue %s: %w", key, err)
+		}
+		if err := s.relate(prKoid, ko.Koid, ontology.RelImplements); err != nil {
 			return err
 		}
 	}
@@ -687,7 +730,7 @@ func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error
 // a build older than the store's window yields no edge. Deployments
 // themselves are not watermark-gated — the list is one call and short;
 // idempotent upserts make re-listing free.
-func (s *syncer) syncDeployments(owner, repo string) error {
+func (s *syncer) syncDeployments(owner, repo, repoKoid string) error {
 	deps, err := paginate(s.ctx, s.client, "deployments.list", func(page int) ([]*gh.Deployment, *gh.Response, error) {
 		return s.client.gh.Repositories.ListDeployments(s.ctx, owner, repo, &gh.DeploymentsListOptions{
 			ListOptions: gh.ListOptions{PerPage: 100, Page: page},
@@ -704,6 +747,9 @@ func (s *syncer) syncDeployments(owner, repo string) error {
 		}
 		depKoid, err := s.upsert(ko)
 		if err != nil {
+			return err
+		}
+		if err := s.relate(repoKoid, depKoid, ontology.RelContainsDeployment); err != nil {
 			return err
 		}
 		if env := depOnt.Environment; env != "" {

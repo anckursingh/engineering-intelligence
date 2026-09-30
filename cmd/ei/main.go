@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/anckursingh/engineering-intelligence/internal/intelligence"
 	"github.com/anckursingh/engineering-intelligence/internal/jira"
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
+	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
 type repoList []string
@@ -30,10 +32,10 @@ func (r *repoList) String() string     { return fmt.Sprint([]string(*r)) }
 func (r *repoList) Set(v string) error { *r = append(*r, v); return nil }
 
 const usage = `usage:
-  ei sync github --owner ACCOUNT [--repo REPO]... [--checkpoint FILE] [--since RFC3339] --db DIR
+  ei sync github --owner ACCOUNT [--repo REPO]... [--jira-base-url URL] [--checkpoint FILE] [--since RFC3339] --db DIR
   ei sync jira --base-url URL --email EMAIL --token TOKEN --project KEY [--since RFC3339] --db DIR
   ei ingest claude --dir DIR --db DIR
-  ei serve --db DIR [--addr :8080]
+  ei serve --db DIR [--addr :8080] [--scope SCOPE[,SCOPE...]]
 
 All commands need AIKOQL_MCP_BIN pointing at the aikoql-mcp server binary
 and --db naming its database directory. GITHUB_TOKEN enables authenticated
@@ -109,6 +111,7 @@ func runGitHub(args []string) error {
 	checkpointPath := fs.String("checkpoint", ".ei/checkpoint.json", "checkpoint file")
 	sinceStr := fs.String("since", "", "backfill override (RFC3339); empty = checkpoint watermark")
 	dbDir := fs.String("db", "", "AIKOQL database directory")
+	jiraBaseURL := fs.String("jira-base-url", "", "Jira base URL (e.g. https://acme.atlassian.net); enables PR → Jira-issue links by key mention")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -122,6 +125,10 @@ func runGitHub(args []string) error {
 		return fmt.Errorf("--db is required\n%s", usage)
 	}
 	since, err := parseSince(*sinceStr)
+	if err != nil {
+		return err
+	}
+	jiraSite, err := parseJiraSite(*jiraBaseURL)
 	if err != nil {
 		return err
 	}
@@ -139,17 +146,18 @@ func runGitHub(args []string) error {
 		Since:          since,
 		Token:          os.Getenv("GITHUB_TOKEN"),
 		Store:          store,
+		JiraSite:       jiraSite,
 	})
 	l := runLog{Source: "github", TenantID: "default", StartedAt: started, EndedAt: time.Now(), Checkpoint: *checkpointPath}
 	if res != nil {
 		l.RunID = res.RunID
+		l.RelationshipsWritten = res.Relationships
 		for _, c := range res.Counts {
 			l.ObjectsCreated += c.New
 			l.ObjectsUpdated += c.Updated
 			l.ObjectsSkipped += c.Skipped
 		}
 		l.ObjectsSeen = l.ObjectsCreated + l.ObjectsUpdated + l.ObjectsSkipped
-		l.RelationshipsWritten = res.Relationships
 	}
 	if err != nil {
 		l.Errors = err.Error()
@@ -221,6 +229,7 @@ func runJira(args []string) error {
 			l.ObjectsUpdated += c.Updated
 		}
 		l.ObjectsSeen = l.ObjectsCreated + l.ObjectsUpdated
+		l.RelationshipsWritten = res.Relationships
 	}
 	if err != nil {
 		l.Errors = err.Error()
@@ -241,6 +250,7 @@ func runJira(args []string) error {
 		c := res.Counts[t]
 		fmt.Printf("  %-14s new %d, updated %d\n", t, c.New, c.Updated)
 	}
+	fmt.Printf("relationships written: %d\n", res.Relationships)
 	fmt.Printf("checkpoint: %s\n", *checkpointPath)
 	return nil
 }
@@ -316,6 +326,7 @@ func runServe(args []string) error {
 	fs.Usage = func() { fmt.Fprint(fs.Output(), usage) }
 	dbDir := fs.String("db", "", "AIKOQL database directory")
 	addr := fs.String("addr", ":8080", "listen address")
+	scope := fs.String("scope", "", "default board scope (comma-separated scopes combine sources)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -330,7 +341,19 @@ func runServe(args []string) error {
 		return err
 	}
 	fmt.Printf("serving Engineering Intelligence API on %s\n", *addr)
-	return http.ListenAndServe(*addr, intelligence.NewAPI(store))
+	if *scope == "" {
+		*scope = os.Getenv("EI_BOARD_SCOPE")
+	}
+	if *scope == "" {
+		if baseURL, project := os.Getenv("JIRA_BASE_URL"), os.Getenv("JIRA_PROJECT_KEY"); baseURL != "" && project != "" {
+			parsed, err := url.Parse(baseURL)
+			if err != nil || parsed.Hostname() == "" {
+				return fmt.Errorf("invalid JIRA_BASE_URL")
+			}
+			*scope = ontology.JiraProjectExternalID(parsed.Hostname(), project)
+		}
+	}
+	return http.ListenAndServe(*addr, intelligence.NewAPIWithDefaultScope(store, *scope))
 }
 
 // runLog is the §33 structured record of one ingestion run, emitted as one
@@ -376,6 +399,23 @@ func parseSince(s string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("--since: %w", err)
 	}
 	return t, nil
+}
+
+// parseJiraSite normalizes --jira-base-url to the bare site host — the same
+// identity scope jira.Sync keys its issues by (client.Site()), so a github
+// run's key mentions resolve against the Jira-synced store.
+func parseJiraSite(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("--jira-base-url: %w", err)
+	}
+	if u.Hostname() == "" {
+		return "", fmt.Errorf("--jira-base-url %q: no host", raw)
+	}
+	return u.Hostname(), nil
 }
 
 func printGitHub(res *github.SyncResult, path string) {

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,10 +41,26 @@ type wireIssue struct {
 		IssueType struct {
 			Name string `json:"name"`
 		} `json:"issuetype"`
+		Project struct {
+			ID   string `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"project"`
 		Created  string   `json:"created"`
 		Updated  string   `json:"updated"`
 		Reporter wireUser `json:"reporter"`
 		Assignee wireUser `json:"assignee"`
+		Parent   *struct {
+			Key string `json:"key"`
+		} `json:"parent"`
+		Sprint []struct {
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			State     string `json:"state"`
+			BoardID   int64  `json:"boardId"`
+			StartDate string `json:"startDate"`
+			EndDate   string `json:"endDate"`
+		} `json:"customfield_10020,omitempty"`
 	} `json:"fields"`
 }
 
@@ -51,6 +68,7 @@ type wireIssue struct {
 type wireUser struct {
 	DisplayName  string `json:"displayName"`
 	EmailAddress string `json:"emailAddress"`
+	AccountID    string `json:"accountId"`
 }
 
 func wire(key, summary, status, issueType string, updated time.Time) *wireIssue {
@@ -58,6 +76,9 @@ func wire(key, summary, status, issueType string, updated time.Time) *wireIssue 
 	w.Fields.Summary = summary
 	w.Fields.Status.Name = status
 	w.Fields.IssueType.Name = issueType
+	w.Fields.Project.Key = strings.SplitN(key, "-", 2)[0]
+	w.Fields.Project.ID = "10000"
+	w.Fields.Project.Name = w.Fields.Project.Key
 	w.Fields.Created = updated.Add(-24 * time.Hour).Format(time.RFC3339)
 	w.Fields.Updated = updated.Format(time.RFC3339)
 	return w
@@ -68,6 +89,30 @@ func (w *wireIssue) withReporter(name, email string) *wireIssue {
 	return w
 }
 
+func (w *wireIssue) withAssignee(name string) *wireIssue {
+	w.Fields.Assignee = wireUser{DisplayName: name, AccountID: "bob-account"}
+	return w
+}
+
+func (w *wireIssue) withParent(key string) *wireIssue {
+	w.Fields.Parent = &struct {
+		Key string `json:"key"`
+	}{Key: key}
+	return w
+}
+
+func (w *wireIssue) withSprint() *wireIssue {
+	w.Fields.Sprint = []struct {
+		ID        int64  `json:"id"`
+		Name      string `json:"name"`
+		State     string `json:"state"`
+		BoardID   int64  `json:"boardId"`
+		StartDate string `json:"startDate"`
+		EndDate   string `json:"endDate"`
+	}{{ID: 7, Name: "Sprint 1", State: "active", BoardID: 1, StartDate: "2026-09-01T00:00:00.000Z", EndDate: "2026-09-15T00:00:00.000Z"}}
+	return w
+}
+
 // NewWorld builds the fixture world and starts its HTTP server (closed by
 // t.Cleanup).
 func NewWorld(t *testing.T) *World {
@@ -75,7 +120,7 @@ func NewWorld(t *testing.T) *World {
 	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
 	w := &World{issues: []wireIssue{
 		*wire("PLAY-1", "Wobbling widget", "Open", "Bug", t0.Add(24*time.Hour)).
-			withReporter("Bob", "bob@corp.example"),
+			withReporter("Bob", "bob@corp.example").withAssignee("Bob").withParent("PLAY-2").withSprint(),
 		*wire("PLAY-2", "Widget platform", "In Progress", "Epic", t0.Add(48*time.Hour)).
 			withReporter("John Doe", "john.doe@company.com"),
 	}}
@@ -142,6 +187,13 @@ func parseWatermark(s string) (time.Time, error) {
 func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if r.URL.Path == "/rest/api/3/field" && r.Method == http.MethodGet {
+		rw.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(rw).Encode([]map[string]string{{"id": "customfield_10020", "name": "Sprint"}}); err != nil {
+			http.Error(rw, "could not encode fields", http.StatusInternalServerError)
+		}
+		return
+	}
 	if r.URL.Path != "/rest/api/3/search/jql" {
 		http.NotFound(rw, r)
 		return

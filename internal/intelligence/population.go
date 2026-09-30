@@ -9,28 +9,68 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anckursingh/engineering-intelligence/internal/knowledge"
 	"github.com/anckursingh/engineering-intelligence/internal/metrics"
 	"github.com/anckursingh/engineering-intelligence/internal/ontology"
 )
 
-// Population walks org → repos → PRs → reviews + AI contributions, then the
-// telemetry of each contribution's recorded session (interactions, runs,
-// tasks) and returns the typed objects with their store external IDs.
-// ponytail: org scope only — repo scoping joins when a question needs it.
+// Population walks one or more graph roots and combines their typed objects.
+// Multiple roots are comma-separated to place source populations on one board.
 func Population(ctx context.Context, store knowledge.KnowledgeStore, scope string) (metrics.Population, error) {
+	var combined metrics.Population
+	for _, part := range strings.Split(scope, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return combined, fmt.Errorf("intelligence: empty scope in composite scope %q", scope)
+		}
+		pop, err := populationForScope(ctx, store, part)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergePopulations(combined, pop)
+	}
+	return combined, nil
+}
+
+func populationForScope(ctx context.Context, store knowledge.KnowledgeStore, scope string) (metrics.Population, error) {
 	var pop metrics.Population
 	seenSession := map[string]bool{}
 	org, err := store.GetByExternalID(ctx, scope)
 	if err != nil {
 		return pop, fmt.Errorf("intelligence: resolve scope %s: %w", scope, err)
 	}
+	if org.TypeName == "JiraProject" {
+		return jiraPopulation(ctx, store, org)
+	}
 	repos, err := store.Traverse(ctx, org.Koid, string(ontology.RelBelongsTo), knowledge.Inbound, 1)
 	if err != nil {
 		return pop, fmt.Errorf("intelligence: traverse repos of %s: %w", scope, err)
 	}
 	for _, repo := range repos {
+		deployments, err := store.Traverse(ctx, repo.Koid, string(ontology.RelContainsDeployment), knowledge.Outbound, 1)
+		if err != nil {
+			return pop, fmt.Errorf("intelligence: traverse deployments of %s: %w", repo.ExternalID, err)
+		}
+		for _, ko := range deployments {
+			deployment, err := convert[ontology.Deployment](ko)
+			if err != nil {
+				return pop, fmt.Errorf("intelligence: decode deployment %s: %w", ko.ExternalID, err)
+			}
+			pop.Deployments = append(pop.Deployments, metrics.Entity[ontology.Deployment]{ExternalID: ko.ExternalID, Value: deployment})
+		}
+		releases, err := store.Traverse(ctx, repo.Koid, string(ontology.RelContainsRelease), knowledge.Outbound, 1)
+		if err != nil {
+			return pop, fmt.Errorf("intelligence: traverse releases of %s: %w", repo.ExternalID, err)
+		}
+		for _, ko := range releases {
+			release, err := convert[ontology.Release](ko)
+			if err != nil {
+				return pop, fmt.Errorf("intelligence: decode release %s: %w", ko.ExternalID, err)
+			}
+			pop.Releases = append(pop.Releases, metrics.Entity[ontology.Release]{ExternalID: ko.ExternalID, Value: release})
+		}
 		builds, err := store.Traverse(ctx, repo.Koid, string(ontology.RelContainsBuild), knowledge.Outbound, 1)
 		if err != nil {
 			return pop, fmt.Errorf("intelligence: traverse builds of %s: %w", repo.ExternalID, err)
@@ -102,6 +142,106 @@ func Population(ctx context.Context, store knowledge.KnowledgeStore, scope strin
 		}
 	}
 	return pop, nil
+}
+
+func mergePopulations(dst, src metrics.Population) metrics.Population {
+	dst.PullRequests = mergeEntities(dst.PullRequests, src.PullRequests)
+	dst.Reviews = mergeEntities(dst.Reviews, src.Reviews)
+	dst.Builds = mergeEntities(dst.Builds, src.Builds)
+	dst.CodeContributions = mergeEntities(dst.CodeContributions, src.CodeContributions)
+	dst.AgentRuns = mergeEntities(dst.AgentRuns, src.AgentRuns)
+	dst.AgentTasks = mergeEntities(dst.AgentTasks, src.AgentTasks)
+	dst.Interactions = mergeEntities(dst.Interactions, src.Interactions)
+	dst.JiraIssues = mergeEntities(dst.JiraIssues, src.JiraIssues)
+	dst.JiraSprints = mergeEntities(dst.JiraSprints, src.JiraSprints)
+	dst.JiraAssignedIssueIDs = mergeStrings(dst.JiraAssignedIssueIDs, src.JiraAssignedIssueIDs)
+	dst.JiraSprintMembershipIssueIDs = append(dst.JiraSprintMembershipIssueIDs, src.JiraSprintMembershipIssueIDs...)
+	dst.Deployments = mergeEntities(dst.Deployments, src.Deployments)
+	dst.Releases = mergeEntities(dst.Releases, src.Releases)
+	if len(src.TaskSessions) > 0 {
+		if dst.TaskSessions == nil {
+			dst.TaskSessions = map[string]string{}
+		}
+		for task, session := range src.TaskSessions {
+			dst.TaskSessions[task] = session
+		}
+	}
+	return dst
+}
+
+func mergeEntities[T any](left, right []metrics.Entity[T]) []metrics.Entity[T] {
+	seen := make(map[string]bool, len(left)+len(right))
+	merged := make([]metrics.Entity[T], 0, len(left)+len(right))
+	for _, entity := range append(left, right...) {
+		if seen[entity.ExternalID] {
+			continue
+		}
+		seen[entity.ExternalID] = true
+		merged = append(merged, entity)
+	}
+	return merged
+}
+
+func mergeStrings(left, right []string) []string {
+	seen := make(map[string]bool, len(left)+len(right))
+	merged := make([]string, 0, len(left)+len(right))
+	for _, value := range append(left, right...) {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		merged = append(merged, value)
+	}
+	return merged
+}
+
+func jiraPopulation(ctx context.Context, store knowledge.KnowledgeStore, project knowledge.KnowledgeObject) (metrics.Population, error) {
+	var pop metrics.Population
+	issues, err := store.Traverse(ctx, project.Koid, string(ontology.RelContainsIssue), knowledge.Outbound, 1)
+	if err != nil {
+		return pop, fmt.Errorf("intelligence: traverse Jira issues of %s: %w", project.ExternalID, err)
+	}
+	sprints := map[string]knowledge.KnowledgeObject{}
+	for _, ko := range issues {
+		if ko.TypeName != "Issue" && ko.TypeName != "Epic" {
+			continue
+		}
+		issue, err := convert[ontology.JiraIssue](ko)
+		if err != nil {
+			return pop, fmt.Errorf("intelligence: decode Jira issue %s: %w", ko.ExternalID, err)
+		}
+		pop.JiraIssues = append(pop.JiraIssues, metrics.Entity[ontology.JiraIssue]{ExternalID: ko.ExternalID, Value: issue})
+		if err := collectJiraLinks(ctx, store, ko, &pop, sprints); err != nil {
+			return pop, err
+		}
+	}
+	for _, ko := range sprints {
+		sprint, err := convert[ontology.JiraSprint](ko)
+		if err != nil {
+			return pop, fmt.Errorf("intelligence: decode Jira sprint %s: %w", ko.ExternalID, err)
+		}
+		pop.JiraSprints = append(pop.JiraSprints, metrics.Entity[ontology.JiraSprint]{ExternalID: ko.ExternalID, Value: sprint})
+	}
+	return pop, nil
+}
+
+func collectJiraLinks(ctx context.Context, store knowledge.KnowledgeStore, issue knowledge.KnowledgeObject, pop *metrics.Population, sprints map[string]knowledge.KnowledgeObject) error {
+	assigned, err := store.Traverse(ctx, issue.Koid, string(ontology.RelAssignedTo), knowledge.Outbound, 1)
+	if err != nil {
+		return fmt.Errorf("intelligence: traverse assignee of %s: %w", issue.ExternalID, err)
+	}
+	if len(assigned) > 0 {
+		pop.JiraAssignedIssueIDs = append(pop.JiraAssignedIssueIDs, issue.ExternalID)
+	}
+	linked, err := store.Traverse(ctx, issue.Koid, string(ontology.RelInSprint), knowledge.Outbound, 1)
+	if err != nil {
+		return fmt.Errorf("intelligence: traverse sprints of %s: %w", issue.ExternalID, err)
+	}
+	for _, sprint := range linked {
+		pop.JiraSprintMembershipIssueIDs = append(pop.JiraSprintMembershipIssueIDs, issue.ExternalID)
+		sprints[sprint.ExternalID] = sprint
+	}
+	return nil
 }
 
 // convert round-trips a knowledge object's properties into its typed form —

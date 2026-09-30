@@ -124,14 +124,15 @@ func MetricChange(pop metrics.Population, a, b Window, primaryName, question str
 		return concluded(question, fmt.Sprintf("Not enough %s data in %s to investigate.", primaryName, firstMissing(a, b, okA, okB)))
 	}
 	if from == to {
-		res := concluded(question, fmt.Sprintf("%s did not change (%.1f %s).", primary.label, from, primary.unit))
+		value, unit := formatValue(from, primary.unit)
+		res := concluded(question, fmt.Sprintf("%s did not change (%s %s).", primary.label, value, unit))
 		res.Primary = buildFinding(primary, from, to, evA, evB)
 		return res
 	}
 
 	p := buildFinding(primary, from, to, evA, evB)
 	var bld strings.Builder
-	fmt.Fprintf(&bld, "%s %s from %.1f to %.1f %s.", p.Label, direction(from, to), p.From, p.To, p.Unit)
+	fmt.Fprintf(&bld, "%s %s from %s.", p.Label, direction(from, to), formatPair(p.From, p.To, p.Unit))
 	var factors []Finding
 	for _, c := range candidates {
 		if c.name == primaryName {
@@ -180,8 +181,9 @@ func summarize(obs []metrics.Observation) (mean float64, ok bool, ev []evidence.
 func factorFinding(c candidate, from float64, okA bool, to float64, okB bool, evA, evB []evidence.Evidence, bName string) (Finding, string, bool) {
 	switch {
 	case !okA && okB:
+		value, unit := formatValue(to, c.unit)
 		return Finding{Metric: c.name, Label: c.label, Unit: c.unit, To: to, Evidence: evB},
-			fmt.Sprintf("%s appeared in %s at %.1f %s.", c.label, bName, to, c.unit), true
+			fmt.Sprintf("%s appeared in %s at %s %s.", c.label, bName, value, unit), true
 	case okA && !okB:
 		return Finding{Metric: c.name, Label: c.label, Unit: c.unit, From: from, Evidence: evA},
 			fmt.Sprintf("%s disappeared in %s.", c.label, bName), true
@@ -190,9 +192,36 @@ func factorFinding(c candidate, from float64, okA bool, to float64, okB bool, ev
 	}
 	f := buildFinding(c, from, to, evA, evB)
 	if from == 0 {
-		return f, fmt.Sprintf("%s changed from %.1f to %.1f %s.", c.label, from, to, c.unit), true
+		return f, fmt.Sprintf("%s changed from %s.", c.label, formatPair(from, to, c.unit)), true
 	}
 	return f, fmt.Sprintf("%s %s by %.1f%%.", c.label, direction(from, to), math.Abs(f.ChangePct)), true
+}
+
+// formatValue chooses a useful unit for short durations so sub-day values do
+// not disappear when rounded to tenths of a day in an investigation sentence.
+func formatValue(value float64, unit string) (string, string) {
+	if unit == "days" && value >= 0 {
+		switch {
+		case value < 1.0/24:
+			value, unit = value*24*60, "minutes"
+		case value < 1:
+			value, unit = value*24, "hours"
+		}
+	}
+	precision := "%.1f"
+	if unit == "minutes" {
+		precision = "%.2f"
+	}
+	return fmt.Sprintf(precision, value), unit
+}
+
+func formatPair(from, to float64, unit string) string {
+	fromValue, fromUnit := formatValue(from, unit)
+	toValue, toUnit := formatValue(to, unit)
+	if fromUnit == toUnit {
+		return fmt.Sprintf("%s to %s %s", fromValue, toValue, fromUnit)
+	}
+	return fmt.Sprintf("%s %s to %s %s", fromValue, fromUnit, toValue, toUnit)
 }
 
 func buildFinding(c candidate, from, to float64, evA, evB []evidence.Evidence) Finding {

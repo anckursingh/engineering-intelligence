@@ -24,16 +24,21 @@ func TestJiraSyncRun1Full(t *testing.T) {
 	}
 
 	want := map[string]jira.Count{
-		"Issue": {New: 1}, // PLAY-1
-		"Epic":  {New: 1}, // PLAY-2: issuetype Epic maps to the canonical Epic
+		"Issue":       {New: 1}, // PLAY-1
+		"Epic":        {New: 1}, // PLAY-2: issuetype Epic maps to the canonical Epic
+		"JiraProject": {New: 1},
+		"Sprint":      {New: 1},
 	}
 	for typ, wantC := range want {
 		if got := res.Counts[typ]; got != wantC {
 			t.Errorf("count %s = %+v, want %+v", typ, got, wantC)
 		}
 	}
-	if len(res.Counts) != 2 {
-		t.Errorf("counts = %+v, want exactly Issue and Epic", res.Counts)
+	if len(res.Counts) != 4 {
+		t.Errorf("counts = %+v, want Issue, Epic, JiraProject, and Sprint", res.Counts)
+	}
+	if res.Relationships != 5 {
+		t.Errorf("relationships = %d, want two project edges, parent, assignee, and sprint links", res.Relationships)
 	}
 
 	// AC-ING-002 + AC-KG-004 mechanics: canonical Issue carries provenance.
@@ -46,6 +51,27 @@ func TestJiraSyncRun1Full(t *testing.T) {
 	}
 	if ko.Provenance.Source != "jira" || ko.Provenance.IngestionRun != res.RunID {
 		t.Errorf("provenance = %+v, want source jira, run %s", ko.Provenance, res.RunID)
+	}
+	links, err := store.Traverse(context.Background(), ko.Koid, "CHILD_OF", knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].Properties["key"] != "PLAY-2" {
+		t.Errorf("issue parent links = %+v, want PLAY-2", links)
+	}
+	assigned, err := store.Traverse(context.Background(), ko.Koid, "ASSIGNED_TO", knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assigned) != 1 || assigned[0].Properties["login"] != "jira:127.0.0.1:bob-account" {
+		t.Errorf("assignee links = %+v, want Bob", assigned)
+	}
+	sprints, err := store.Traverse(context.Background(), ko.Koid, "IN_SPRINT", knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sprints) != 1 || sprints[0].Properties["name"] != "Sprint 1" {
+		t.Errorf("sprint links = %+v, want Sprint 1", sprints)
 	}
 
 	ck, err := checkpoint.Load(cfg.CheckpointPath)
@@ -61,6 +87,27 @@ func TestJiraSyncRun1Full(t *testing.T) {
 	tokens := w.PageTokens()
 	if len(tokens) != 2 || tokens[0] != "" || tokens[1] != "next" {
 		t.Errorf("search page tokens = %q, want empty token then next", tokens)
+	}
+}
+
+func TestJiraSyncCreatesConfiguredProjectScopeAlias(t *testing.T) {
+	w := jiratest.NewWorld(t)
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+	cfg.Project = "ALIAS"
+	if _, err := jira.Sync(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	project, err := store.GetByExternalID(context.Background(), "jira.com:127.0.0.1:project:ALIAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := store.Traverse(context.Background(), project.Koid, "CONTAINS_ISSUE", knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("configured project scope contains %d issues, want both matched Jira issues", len(issues))
 	}
 }
 

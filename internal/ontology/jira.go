@@ -36,6 +36,18 @@ func JiraUserExternalID(site, normEmail string) string {
 	return fmt.Sprintf("jira.com:%s:email:%s", site, normEmail)
 }
 
+func JiraAccountExternalID(site, accountID string) string {
+	return fmt.Sprintf("jira.com:%s:account:%s", site, accountID)
+}
+
+func JiraSprintExternalID(site string, sprintID int64) string {
+	return fmt.Sprintf("jira.com:%s:sprint:%d", site, sprintID)
+}
+
+func JiraProjectExternalID(site, key string) string {
+	return fmt.Sprintf("jira.com:%s:project:%s", site, strings.ToUpper(key))
+}
+
 // NewJiraProvenance mirrors NewProvenance: source-side facts only — the
 // run-scoped fields are the ingestion layer's job (§10).
 func NewJiraProvenance(sourceURL string, sourceUpdatedAt time.Time) knowledge.Provenance {
@@ -45,6 +57,32 @@ func NewJiraProvenance(sourceURL string, sourceUpdatedAt time.Time) knowledge.Pr
 		SourceUpdatedAt:  sourceUpdatedAt.UTC(),
 		ConnectorVersion: "jira-connector/v0",
 	}
+}
+
+type JiraSprint struct {
+	Site      string `json:"-"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Project   string `json:"project"`
+	BoardID   int64  `json:"board_id"`
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
+}
+
+type JiraProject struct {
+	Site string `json:"-"`
+	ID   string `json:"id,omitempty"`
+	Key  string `json:"key"`
+	Name string `json:"name,omitempty"`
+}
+
+func (p JiraProject) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	return toKnowledgeObject("JiraProject", JiraProjectExternalID(p.Site, p.Key), p, prov)
+}
+
+func (s JiraSprint) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	return toKnowledgeObject("Sprint", JiraSprintExternalID(s.Site, s.ID), s, prov)
 }
 
 func (i JiraIssue) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {

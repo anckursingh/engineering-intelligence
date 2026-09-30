@@ -124,7 +124,11 @@ func (r *Resolver) Resolve(ctx context.Context, p Person, prov knowledge.Provena
 		extID := ontology.UserExternalID(p.Login) // "" for email-only: picked below
 		switch {
 		case r.source == "jira":
-			extID = ontology.JiraUserExternalID(r.site, p.Email)
+			if p.Email != "" {
+				extID = ontology.JiraUserExternalID(r.site, p.Email)
+			} else {
+				extID = ontology.JiraAccountExternalID(r.site, p.Login)
+			}
 		case p.Rule == "email":
 			extID = ontology.UserEmailExternalID(p.Email)
 		}

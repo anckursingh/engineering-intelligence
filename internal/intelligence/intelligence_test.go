@@ -324,6 +324,49 @@ func TestMetricChangeMissingData(t *testing.T) {
 	}
 }
 
+func TestMetricChangeFormatsShortReviewLatencyAsMinutes(t *testing.T) {
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	a := Window{Name: "Previous period", Range: metrics.Window{Start: base, End: base.Add(31 * 24 * time.Hour)}}
+	b := Window{Name: "Current period", Range: metrics.Window{Start: base.Add(31 * 24 * time.Hour), End: base.Add(61 * 24 * time.Hour)}}
+	pop := metrics.Population{
+		PullRequests: []metrics.Entity[ontology.PullRequest]{
+			pr("pr-a", 1, base.Add(10*24*time.Hour), base.Add(11*24*time.Hour)),
+			pr("pr-b", 2, base.Add(40*24*time.Hour), base.Add(41*24*time.Hour)),
+		},
+		Reviews: []metrics.Entity[ontology.Review]{
+			review("review-a", 1, base.Add(10*24*time.Hour+129*time.Second)),
+			review("review-b", 2, base.Add(40*24*time.Hour+879*time.Second)),
+		},
+	}
+
+	got := MetricChange(pop, a, b, "review_latency", QuestionReviewLatency)
+	want := "Review latency increased from 2.15 to 14.65 minutes. " +
+		"The data supports an association, but does not establish causality."
+	if got.Statement != want {
+		t.Errorf("statement = %q\nwant       %q", got.Statement, want)
+	}
+}
+
+func TestFormatValueUsesReadableDurationUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		value     float64
+		wantValue string
+		wantUnit  string
+	}{
+		{name: "sub-hour", value: 0.00149305555555556, wantValue: "2.15", wantUnit: "minutes"},
+		{name: "sub-day", value: 0.5, wantValue: "12.0", wantUnit: "hours"},
+		{name: "day", value: 1, wantValue: "1.0", wantUnit: "days"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, unit := formatValue(tc.value, "days")
+			if value != tc.wantValue || unit != tc.wantUnit {
+				t.Errorf("formatValue = %q %q, want %q %q", value, unit, tc.wantValue, tc.wantUnit)
+			}
+		})
+	}
+}
+
 // TestCycleTimeChangeAIFlatExcluded: an unchanged AI-assisted share (100% in
 // both windows) is not a candidate factor.
 func TestCycleTimeChangeAIFlatExcluded(t *testing.T) {

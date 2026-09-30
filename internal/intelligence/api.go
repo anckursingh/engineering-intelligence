@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -93,16 +94,22 @@ type InvestigationResult struct {
 
 // API serves the §24 endpoints over one store.
 type API struct {
-	store knowledge.KnowledgeStore
-	board *boardCache
-	mux   *http.ServeMux
-	mu    sync.Mutex
-	next  int
-	done  map[string]InvestigationResult
+	store        knowledge.KnowledgeStore
+	board        *boardCache
+	mux          *http.ServeMux
+	mu           sync.Mutex
+	next         int
+	done         map[string]InvestigationResult
+	defaultScope string
 }
 
 func NewAPI(store knowledge.KnowledgeStore) *API {
+	return NewAPIWithDefaultScope(store, "")
+}
+
+func NewAPIWithDefaultScope(store knowledge.KnowledgeStore, scope string) *API {
 	a := &API{store: store, board: newBoardCache(time.Minute), done: map[string]InvestigationResult{}}
+	a.defaultScope = scope
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", a.handleHealth)
 	mux.HandleFunc("GET /metrics", a.handleMetrics)
@@ -115,6 +122,10 @@ func NewAPI(store knowledge.KnowledgeStore) *API {
 	mux.HandleFunc("GET /{$}", a.handleDashboard)
 	a.mux = mux
 	return a
+}
+
+func dashboardScopeURL(scope string) string {
+	return "/?scope=" + url.QueryEscape(scope)
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }

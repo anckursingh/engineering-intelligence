@@ -26,13 +26,19 @@ type Entity[T any] struct {
 
 // Population is the object set a metric is computed over.
 type Population struct {
-	PullRequests      []Entity[ontology.PullRequest]
-	Reviews           []Entity[ontology.Review]
-	Builds            []Entity[ontology.Build]
-	CodeContributions []Entity[ontology.CodeContribution]
-	AgentRuns         []Entity[ontology.AgentRun]
-	AgentTasks        []Entity[ontology.AgentTask]
-	Interactions      []Entity[ontology.Interaction]
+	PullRequests                 []Entity[ontology.PullRequest]
+	Reviews                      []Entity[ontology.Review]
+	Builds                       []Entity[ontology.Build]
+	CodeContributions            []Entity[ontology.CodeContribution]
+	AgentRuns                    []Entity[ontology.AgentRun]
+	AgentTasks                   []Entity[ontology.AgentTask]
+	Interactions                 []Entity[ontology.Interaction]
+	JiraIssues                   []Entity[ontology.JiraIssue]
+	JiraSprints                  []Entity[ontology.JiraSprint]
+	JiraAssignedIssueIDs         []string
+	JiraSprintMembershipIssueIDs []string
+	Deployments                  []Entity[ontology.Deployment]
+	Releases                     []Entity[ontology.Release]
 	// TaskSessions pairs each AgentTask external ID with its containing
 	// coding session — the location axis of the task-failure report.
 	TaskSessions map[string]string

@@ -146,7 +146,7 @@ func TestParseSession(t *testing.T) {
 		t.Fatalf("runs = %d, want 3 (one per tool-calling assistant message)", len(sess.runs))
 	}
 	for _, r := range sess.runs {
-		if r.Agent != model || r.Status != "completed" || r.CostUSD != 0 {
+		if r.Agent != model || r.Status != "completed" || r.CostUSD != 0 || r.CostReported {
 			t.Errorf("run = %+v", r)
 		}
 	}

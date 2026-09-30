@@ -22,10 +22,14 @@ package ontology
 //	                TestSyncAgentTaskLinks
 //
 //	IMPLEMENTS      source PullRequest → target Issue
-//	                meaning: the PR body references/closes the issue
+//	                meaning: the PR body references/closes the issue; for a
+//	                Jira issue, the key mention in the PR's title, body, or
+//	                branch name links it (only when the key resolves to an
+//	                ingested JiraIssue)
 //	                inverse: implemented by (inbound traversal)
 //	                cardinality: N:M
-//	                test: AC-KG-001 + TestPRToIssueLinks (§13.4)
+//	                test: AC-KG-001 + TestPRToIssueLinks (§13.4) +
+//	                TestPRJiraIssueLinks
 //
 //	PART_OF         source Commit → target PullRequest
 //	                meaning: the commit belongs to the PR's branch — ingested
@@ -159,4 +163,9 @@ const (
 	RelContainsTask        RelType = "CONTAINS_TASK"        // CodingSession → AgentTask
 	RelResolvesTo          RelType = "RESOLVES_TO"
 	RelAIContributes       RelType = "AI_CONTRIBUTES"
+	RelAssignedTo          RelType = "ASSIGNED_TO"         // Issue → Engineer; Jira's current assignee snapshot
+	RelInSprint            RelType = "IN_SPRINT"           // Issue → Sprint; Jira Scrum membership
+	RelChildOf             RelType = "CHILD_OF"            // Jira child issue → parent issue/epic
+	RelContainsIssue       RelType = "CONTAINS_ISSUE"      // JiraProject → Issue
+	RelContainsDeployment  RelType = "CONTAINS_DEPLOYMENT" // Repository → Deployment
 )

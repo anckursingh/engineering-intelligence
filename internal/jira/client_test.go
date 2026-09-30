@@ -18,6 +18,13 @@ func TestSearchUsesEnhancedJQLRequest(t *testing.T) {
 	}
 	var authOK bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/field" {
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode([]map[string]string{{"id": "customfield_10020", "name": "Sprint"}}); err != nil {
+				t.Errorf("write field list: %v", err)
+			}
+			return
+		}
 		method = r.Method
 		path = r.URL.Path
 		user, token, ok := r.BasicAuth()
@@ -50,8 +57,8 @@ func TestSearchUsesEnhancedJQLRequest(t *testing.T) {
 	if body.JQL != "project = SCRUM" || body.MaxResults != 100 || body.NextPageToken != "cursor-2" {
 		t.Errorf("request body = %+v, want JQL and 100 results", body)
 	}
-	if len(body.Fields) != 8 || body.Fields[0] != "key" || body.Fields[7] != "assignee" {
-		t.Errorf("fields = %v, want the eight connector fields", body.Fields)
+	if len(body.Fields) != 11 || body.Fields[0] != "key" || body.Fields[7] != "assignee" || body.Fields[8] != "parent" || body.Fields[9] != "project" || body.Fields[10] != "customfield_10020" {
+		t.Errorf("fields = %v, want project and the discovered sprint field", body.Fields)
 	}
 	if !authOK {
 		t.Error("request did not use the configured basic-auth credentials")
