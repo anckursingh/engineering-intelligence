@@ -237,8 +237,8 @@ type comparisonPopulation struct {
 }
 
 // handleComparisons serves POST /comparisons (Milestone F, item 45): one
-// window's merged PRs compared between the AI-assisted and unattributed
-// populations, per PR-scoped metric.
+// window's merged PRs compared between AI-attributed and no-positive-AI-
+// evidence populations, per PR-scoped metric.
 func (a *API) handleComparisons(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Scope string `json:"scope"`
@@ -276,20 +276,22 @@ func (a *API) handleComparisons(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	assisted, plain, rows := ComparePopulations(pop, metrics.Window{Start: start, End: end})
+	aiAttributed, noPositiveAIEvidence, rows := ComparePopulations(pop, metrics.Window{Start: start, End: end})
 	writeJSON(w, http.StatusOK, struct {
 		Scope       string                 `json:"scope"`
 		Start       string                 `json:"start"`
 		End         string                 `json:"end"`
 		Populations []comparisonPopulation `json:"populations"`
 		Metrics     []PopulationComparison `json:"metrics"`
+		Limitations []string               `json:"limitations"`
 	}{
 		Scope: req.Scope, Start: req.Start, End: req.End,
 		Populations: []comparisonPopulation{
-			{ID: "ai_assisted", Label: "AI-assisted PRs", MergedPRs: assisted},
-			{ID: "unattributed", Label: "PRs without AI attribution", MergedPRs: plain},
+			{ID: "ai_attributed", Label: "PRs with positive AI evidence", MergedPRs: aiAttributed},
+			{ID: "no_positive_ai_evidence", Label: "PRs without positive AI evidence", MergedPRs: noPositiveAIEvidence},
 		},
-		Metrics: rows,
+		Metrics:     rows,
+		Limitations: []string{"PRs without positive AI evidence may have unknown or unobserved AI activity; this is not a human-authored population."},
 	})
 }
 

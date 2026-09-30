@@ -89,9 +89,11 @@ supported `/ask` questions are:
 
 `/ask` accepts one period. `POST /investigations` accepts explicitly named
 `window_a` and `window_b` periods for a metric comparison. `POST /comparisons`
-compares AI-assisted and unattributed merged PR populations in one period.
-That comparison is observational; population differences do not establish that
-AI caused an outcome.
+compares merged PRs with evidence-qualified AI attribution against PRs without
+positive AI evidence. Only valid DIRECT or STRONG attribution counts as
+positive evidence. The other group may include unknown or unobserved AI
+activity; it is not a human-authored cohort. The comparison is observational;
+population differences do not establish that AI caused an outcome.
 
 Each result should be reviewed for its population/scope, time window, evidence
 object IDs, epistemic state, and limitations. Resolve a sample of evidence IDs

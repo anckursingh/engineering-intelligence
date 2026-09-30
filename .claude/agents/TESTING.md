@@ -395,10 +395,20 @@ All applicable rows true before "done":
 
 ## Population comparison (item 45, post-contract — roadmap Milestone F)
 
-- `ComparePopulations(pop, win) (assisted, unattributed int, rows []PopulationComparison)`: one window's merged PRs partition by AI attribution (CodeContribution names repository + PR number), reviews follow their PRs, and the PR-scoped metrics (cycle_time, review_latency, pr_size, review_cycles) compare between the sub-populations. A nil side is an honest gap (a metric not computable on that side), a metric absent on both sides drops the row entirely.
-- POST /comparisons {scope,start,end} returns populations (id/label/merged_prs) + metric rows (metric/label/unit + `ai_assisted`/`unattributed` ComparisonValues with CALCULATED state and evidence); bad window or unknown scope → 400.
-- Honest-partition gotcha: a side's PRs carrying no reviews at all makes review_latency/review_cycles absent there — silence, never a fake zero (item 35's contract, now pinned cross-sectionally).
-- Tests: `TestComparePopulationsPartitionsAI`, `TestComparePopulationsUnattributedAbsent`, `TestAPIComparisonsEndpoint`.
+- `ComparePopulations(pop, win) (aiAttributed, noPositiveAIEvidence int, rows []PopulationComparison)`: one window's merged PRs partition into AI-attributed only when a linked contribution has a valid DIRECT/STRONG claim with source and evidence. INFERRED, UNKNOWN, and invalid DIRECT/STRONG claims remain in `no_positive_ai_evidence`; that group may also contain unobserved AI activity and is not human-authored.
+- POST /comparisons {scope,start,end} returns populations `ai_attributed` and `no_positive_ai_evidence`, per-metric evidence, and an explicit cohort limitation. Metric values remain CALCULATED; a missing side stays absent, not zero.
+- Honest-metric gotcha: a group's PRs carrying no reviews at all make review_latency/review_cycles absent there — silence, never a fake zero (item 35's contract, pinned cross-sectionally).
+- Tests: `TestComparePopulationsPartitionsAI`, `TestComparePopulationsNoPositiveEvidenceAbsent`, `TestComparePopulationsRequiresEvidenceQualifiedAttribution`, `TestAPIComparisonsEndpoint`.
+
+## Post-review regression cases
+
+- [x] Population comparisons count only valid DIRECT/STRONG AI attribution; inferred, unknown, and invalid claims never enter the AI-attributed cohort.
+- [x] The comparison API labels the other cohort `no_positive_ai_evidence` and states that unknown/unobserved AI activity may be present.
+- [x] AIKOQL rate-limit retries terminate after five retries, wrap the final upstream error, and retain context-aware cancellation (`TestRateLimitRetryExhaustion`).
+- [ ] GitHub stream-specific cursors/replay windows: add only after measured workload or partner evaluation shows missed late updates or material full-list scan cost.
+- [ ] Workflow-job and deployment-status evidence: add only to answer a repeated, validated investigation need.
+- [ ] Persisted/versioned MetricObservation: add only when historical formula reproducibility is required by a validated workflow.
+- [ ] Hosted authentication/authorization and tenant selection: required before any shared or hosted deployment; store-level tenant tests are not sufficient.
 
 ## Task-failure report (item 46, post-contract — roadmap Milestone F)
 

@@ -1,9 +1,9 @@
 // comparison.go is population comparison (Milestone F, item 45): the
 // cross-sectional companion to MetricChange's temporal comparison. One
-// window's merged PRs partition into AI-assisted (a CodeContribution links
-// to the PR) and unattributed, and the PR-scoped metrics compare between
-// the two populations. A metric that computes on only one side keeps an
-// honest gap on the other; one that computes on neither is dropped.
+// window's merged PRs partition into AI-attributed and no-positive-AI-evidence
+// groups. Only validated DIRECT/STRONG contributions support AI attribution.
+// A metric that computes on only one side keeps an honest gap on the other;
+// one that computes on neither is dropped.
 package intelligence
 
 import (
@@ -19,14 +19,14 @@ type ComparisonValue struct {
 	Evidence       []evidence.Evidence `json:"evidence"`
 }
 
-// PopulationComparison is one metric compared between the AI-assisted and
-// unattributed populations; a nil side is an honest gap, never a zero.
+// PopulationComparison is one metric compared between AI-attributed and
+// no-positive-AI-evidence populations; a nil side is an honest gap, never zero.
 type PopulationComparison struct {
-	Metric       string           `json:"metric"`
-	Label        string           `json:"label"`
-	Unit         string           `json:"unit"`
-	Assisted     *ComparisonValue `json:"ai_assisted,omitempty"`
-	Unattributed *ComparisonValue `json:"unattributed,omitempty"`
+	Metric               string           `json:"metric"`
+	Label                string           `json:"label"`
+	Unit                 string           `json:"unit"`
+	AIAttributed         *ComparisonValue `json:"ai_attributed,omitempty"`
+	NoPositiveAIEvidence *ComparisonValue `json:"no_positive_ai_evidence,omitempty"`
 }
 
 // comparisonMetrics are the PR-scoped metrics compared across populations —
@@ -36,47 +36,48 @@ var comparisonMetrics = []string{"cycle_time", "review_latency", "pr_size", "rev
 // ComparePopulations partitions the window's merged PRs by AI attribution
 // and compares the PR-scoped metrics between the two populations, returning
 // each population's merged-PR count alongside the metric rows.
-func ComparePopulations(pop metrics.Population, win metrics.Window) (assistedCount, unattributedCount int, rows []PopulationComparison) {
-	assisted, plain := partitionPRs(pop, win)
-	if len(assisted) == 0 && len(plain) == 0 {
+func ComparePopulations(pop metrics.Population, win metrics.Window) (aiAttributedCount, noPositiveAIEvidenceCount int, rows []PopulationComparison) {
+	aiAttributed, noPositiveAIEvidence := partitionPRs(pop, win)
+	if len(aiAttributed) == 0 && len(noPositiveAIEvidence) == 0 {
 		return 0, 0, nil
 	}
-	aPop := metrics.Population{PullRequests: assisted, Reviews: reviewsOf(pop, assisted)}
-	pPop := metrics.Population{PullRequests: plain, Reviews: reviewsOf(pop, plain)}
+	aiPop := metrics.Population{PullRequests: aiAttributed, Reviews: reviewsOf(pop, aiAttributed)}
+	noPositiveAIPop := metrics.Population{PullRequests: noPositiveAIEvidence, Reviews: reviewsOf(pop, noPositiveAIEvidence)}
 	for _, name := range comparisonMetrics {
 		c, ok := candidateByName(name)
 		if !ok {
 			continue
 		}
-		aV, aOK, aEv := summarize(c.compute(aPop, win))
-		pV, pOK, pEv := summarize(c.compute(pPop, win))
-		if !aOK && !pOK {
+		aiValue, hasAIValue, aiEvidence := summarize(c.compute(aiPop, win))
+		noPositiveValue, hasNoPositiveValue, noPositiveEvidence := summarize(c.compute(noPositiveAIPop, win))
+		if !hasAIValue && !hasNoPositiveValue {
 			continue
 		}
 		row := PopulationComparison{Metric: c.name, Label: c.label, Unit: c.unit}
-		if aOK {
-			row.Assisted = &ComparisonValue{Value: aV, EpistemicState: evidence.StateCalculated.String(), Evidence: aEv}
+		if hasAIValue {
+			row.AIAttributed = &ComparisonValue{Value: aiValue, EpistemicState: evidence.StateCalculated.String(), Evidence: aiEvidence}
 		}
-		if pOK {
-			row.Unattributed = &ComparisonValue{Value: pV, EpistemicState: evidence.StateCalculated.String(), Evidence: pEv}
+		if hasNoPositiveValue {
+			row.NoPositiveAIEvidence = &ComparisonValue{Value: noPositiveValue, EpistemicState: evidence.StateCalculated.String(), Evidence: noPositiveEvidence}
 		}
 		rows = append(rows, row)
 	}
-	return len(assisted), len(plain), rows
+	return len(aiAttributed), len(noPositiveAIEvidence), rows
 }
 
-// partitionPRs splits the window's merged PRs by AI attribution: a PR is
-// assisted when a CodeContribution names its repository and number.
-func partitionPRs(pop metrics.Population, win metrics.Window) (assisted, plain []metrics.Entity[ontology.PullRequest]) {
-	assistedNums := map[string]map[int]bool{}
+// partitionPRs splits merged PRs by positive AI evidence. Unknown, inferred,
+// and invalid attribution remains in the no-positive-evidence group; that
+// group does not claim the work was human-authored.
+func partitionPRs(pop metrics.Population, win metrics.Window) (aiAttributed, noPositiveAIEvidence []metrics.Entity[ontology.PullRequest]) {
+	aiAttributedNums := map[string]map[int]bool{}
 	for _, c := range pop.CodeContributions {
-		if c.Value.PRNumber == 0 {
+		if c.Value.PRNumber == 0 || !hasEvidenceQualifiedAttribution(c.Value.Attribution) {
 			continue
 		}
-		m := assistedNums[c.Value.Repository]
+		m := aiAttributedNums[c.Value.Repository]
 		if m == nil {
 			m = map[int]bool{}
-			assistedNums[c.Value.Repository] = m
+			aiAttributedNums[c.Value.Repository] = m
 		}
 		m[c.Value.PRNumber] = true
 	}
@@ -84,13 +85,20 @@ func partitionPRs(pop metrics.Population, win metrics.Window) (assisted, plain [
 		if !e.Value.Merged || e.Value.MergedAt.IsZero() || e.Value.MergedAt.Before(win.Start) || !e.Value.MergedAt.Before(win.End) {
 			continue
 		}
-		if assistedNums[e.Value.Repository][e.Value.Number] {
-			assisted = append(assisted, e)
+		if aiAttributedNums[e.Value.Repository][e.Value.Number] {
+			aiAttributed = append(aiAttributed, e)
 		} else {
-			plain = append(plain, e)
+			noPositiveAIEvidence = append(noPositiveAIEvidence, e)
 		}
 	}
-	return assisted, plain
+	return aiAttributed, noPositiveAIEvidence
+}
+
+func hasEvidenceQualifiedAttribution(a ontology.Attribution) bool {
+	if a.Level != ontology.AttributionDirect && a.Level != ontology.AttributionStrong {
+		return false
+	}
+	return a.Validate() == nil
 }
 
 // reviewsOf keeps the reviews belonging to the given PRs (repository and

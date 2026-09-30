@@ -282,7 +282,7 @@ func TestAPIComparisonsEndpoint(t *testing.T) {
 		relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: prKO.Koid, To: repo.Koid})
 		prKOs[num] = prKO
 	}
-	for _, num := range []int{1, 3} { // reviews only on the unattributed PRs
+	for _, num := range []int{1, 3} { // reviews only on the no-positive-AI-evidence PRs
 		revKO := upsert(t, store, mapKO(t, ontology.Review{
 			Repository: "acme/widgets", PRNumber: num, ID: int64(100 + num),
 			SubmittedAt: base.Add(time.Duration(num+1) * 24 * time.Hour),
@@ -311,21 +311,25 @@ func TestAPIComparisonsEndpoint(t *testing.T) {
 			Label     string `json:"label"`
 			MergedPRs int    `json:"merged_prs"`
 		} `json:"populations"`
-		Metrics []PopulationComparison `json:"metrics"`
+		Metrics     []PopulationComparison `json:"metrics"`
+		Limitations []string               `json:"limitations"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Populations) != 2 || got.Populations[0].ID != "ai_assisted" || got.Populations[0].MergedPRs != 2 ||
-		got.Populations[1].ID != "unattributed" || got.Populations[1].MergedPRs != 2 {
-		t.Errorf("populations = %+v, want ai_assisted 2 + unattributed 2", got.Populations)
+	if len(got.Populations) != 2 || got.Populations[0].ID != "ai_attributed" || got.Populations[0].MergedPRs != 2 ||
+		got.Populations[1].ID != "no_positive_ai_evidence" || got.Populations[1].MergedPRs != 2 {
+		t.Errorf("populations = %+v, want ai_attributed 2 + no_positive_ai_evidence 2", got.Populations)
+	}
+	if len(got.Limitations) != 1 || !strings.Contains(got.Limitations[0], "not a human-authored population") {
+		t.Errorf("limitations = %v, want explicit non-human-authorship caveat", got.Limitations)
 	}
 	if len(got.Metrics) < 1 || got.Metrics[0].Metric != "cycle_time" {
 		t.Fatalf("metrics = %+v, want cycle_time first", got.Metrics)
 	}
-	if got.Metrics[0].Assisted == nil || got.Metrics[0].Assisted.Value != 5.0 ||
-		got.Metrics[0].Unattributed == nil || got.Metrics[0].Unattributed.Value != 2.5 {
-		t.Errorf("cycle_time = %+v vs %+v, want 5.0 vs 2.5", got.Metrics[0].Assisted, got.Metrics[0].Unattributed)
+	if got.Metrics[0].AIAttributed == nil || got.Metrics[0].AIAttributed.Value != 5.0 ||
+		got.Metrics[0].NoPositiveAIEvidence == nil || got.Metrics[0].NoPositiveAIEvidence.Value != 2.5 {
+		t.Errorf("cycle_time = %+v vs %+v, want 5.0 vs 2.5", got.Metrics[0].AIAttributed, got.Metrics[0].NoPositiveAIEvidence)
 	}
 
 	// Bad window → 400.

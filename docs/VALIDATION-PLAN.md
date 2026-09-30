@@ -29,10 +29,12 @@ Use questions supported by the current API:
 
 1. **Why did review latency change?** Compare equal-length periods and inspect
    the primary measure, candidate factors, evidence, and limitations.
-2. **How do AI-assisted PRs compare with unattributed PRs?** Use
-   `POST /comparisons` for cycle time, review latency, PR size, and review
-   cycles where data exists. Treat the result as an association, not a causal
-   estimate. Unattributed does not mean human-authored.
+2. **How do evidence-qualified AI-attributed PRs compare with PRs without
+   positive AI evidence?** Use `POST /comparisons` for cycle time, review
+   latency, PR size, and review cycles where data exists. Only valid DIRECT
+   or STRONG attribution counts as positive AI evidence. The other group may
+   include unknown or unobserved AI activity; it is not a human-authored cohort.
+   Treat the result as an association, not a causal estimate.
 3. **Where are agent tasks failing?** Use `POST /ask` to locate failed,
    completed tasks by session and inspect the underlying task evidence.
 
@@ -55,8 +57,9 @@ stretching the engine's answer to fit.
 8. Follow up after the team has had time to act; record whether the investigation
    led to a decision or remained interesting but unused.
 
-Do not present a correlation as causal impact. In particular, AI-assisted and
-unattributed PRs may differ in work type, team, size, or selection into usage.
+Do not present a correlation as causal impact. In particular, AI-attributed and
+no-positive-AI-evidence PRs may differ in work type, team, size, telemetry
+coverage, or selection into usage.
 
 ## Evidence to capture
 
