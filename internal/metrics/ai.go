@@ -80,13 +80,13 @@ var (
 	}
 	DefAICost = Definition{
 		Name:        "ai_cost",
-		Formula:     "sum(cost_usd)",
+		Formula:     "sum(cost_usd) for runs with cost reported by the source",
 		Population:  "AgentRuns",
 		Window:      "started_at in window (event time)",
 		Sources:     []string{"ai-telemetry"},
-		Filters:     []string{"started_at set"},
+		Filters:     []string{"started_at set", "cost reported (or non-zero legacy cost)"},
 		Aggregation: "sum — one observation per window",
-		Limitations: []string{"currency and accounting are source-defined"},
+		Limitations: []string{"currency and accounting are source-defined", "unreported cost is absence, not zero"},
 	}
 	DefCostPerCompletedTask = Definition{
 		Name:        "cost_per_completed_task",
@@ -96,7 +96,7 @@ var (
 		Sources:     []string{"ai-telemetry"},
 		Filters:     []string{"runs exist", ">=1 task completed in window"},
 		Aggregation: "one observation per window",
-		Limitations: []string{"undefined (no runs or no completed tasks) is absence, not zero"},
+		Limitations: []string{"unreported cost, no runs, or no completed tasks is absence, not zero"},
 	}
 )
 
@@ -290,6 +290,9 @@ func AICost(pop Population, w Window) []Observation {
 			continue
 		}
 		seen[e.ExternalID] = true
+		if !e.Value.CostReported && e.Value.CostUSD == 0 {
+			return nil // a partial sum is not the organization's AI cost
+		}
 		ids = append(ids, e.ExternalID)
 		sum += e.Value.CostUSD
 	}

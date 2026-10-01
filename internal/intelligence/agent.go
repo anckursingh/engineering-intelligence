@@ -1,8 +1,8 @@
 // agent.go is the evidence-backed engineering agent (§29): natural language
-// in, evidence-referenced answer out. Classification routes the supported
+// in, evidence-referenced answer out. Classification routes each supported
 // question to the deterministic engine — question classification → AIKOQL
 // retrieval (Population) → graph traversal → metric calculation → evidence
-// collection → reasoning (CycleTimeChange) → answer with evidence references.
+// collection → reasoning (MetricChange) → answer with evidence references.
 // Unknown questions get an honest refusal, never an invented answer: the
 // agent's "reasoning" IS the deterministic engine, so there is no LLM step
 // to drift and nothing to fabricate from.
@@ -32,33 +32,72 @@ type Query struct {
 }
 
 // Answer is the evidence-referenced answer: the engine's statement plus the
-// objects it was computed from (§29's last step).
+// objects it was computed from (§29's last step). Scope, From/To and
+// EpistemicState are the Milestone F exit contract (item 47): every answer
+// carries its population, time window and epistemic state, not only the
+// claim, evidence and limitations.
 type Answer struct {
-	Question    string              `json:"question"`
-	Class       string              `json:"class"`
-	Statement   string              `json:"statement"`
-	Evidence    []evidence.Evidence `json:"evidence"`
-	Limitations []string            `json:"limitations"`
+	Question       string              `json:"question"`
+	Class          string              `json:"class"`
+	Statement      string              `json:"statement"`
+	Scope          string              `json:"scope"`
+	From           time.Time           `json:"from"`
+	To             time.Time           `json:"to"`
+	EpistemicState string              `json:"epistemic_state"`
+	Evidence       []evidence.Evidence `json:"evidence"`
+	Limitations    []string            `json:"limitations"`
 }
+
+// classQuestions maps engine classes to their supported question; the
+// primary metric comes from questionPrimary.
+var classQuestions = map[string]string{
+	"cycle_time_change":     QuestionCycleTime,
+	"ci_quality_change":     QuestionCIQuality,
+	"ai_adoption_change":    QuestionAIAdoption,
+	"review_latency_change": QuestionReviewLatency,
+}
+
+// supportedQuestions renders the refusal list, in declaration order.
+var supportedQuestions = []string{QuestionCycleTime, QuestionCIQuality, QuestionAIAdoption, QuestionReviewLatency, QuestionTaskFailures}
 
 // Ask classifies the question and runs the matching engine.
 func Ask(ctx context.Context, store knowledge.KnowledgeStore, q Query) (Answer, error) {
-	if classify(q.Text) == "cycle_time_change" {
-		return askCycleTimeChange(ctx, store, q)
+	class := classify(q.Text)
+	if class == "task_failures" {
+		return askTaskFailures(ctx, store, q)
+	}
+	if question, ok := classQuestions[class]; ok {
+		return askChange(ctx, store, q, class, question)
 	}
 	return Answer{
 		Question: q.Text,
 		Class:    "unsupported",
-		Statement: "I can only answer: " + QuestionCycleTime +
+		Statement: "I can only answer: " + strings.Join(supportedQuestions, "; ") +
 			" (the comparison window is the period before the one you give).",
+		Scope:          q.Scope,
+		From:           q.From,
+		To:             q.To,
+		EpistemicState: evidence.StateUnknown.String(),
 	}, nil
 }
 
-// classify matches normalized phrasing to an engine class. "" = unsupported.
+// classify matches normalized phrasing to an engine class: a topic phrase
+// plus a change word (or a why-question) routes to the matching engine.
+// "" = unsupported.
 func classify(text string) string {
 	norm := strings.ToLower(text)
-	if strings.Contains(norm, "cycle time") && (hasChangeWord(norm) || strings.HasPrefix(strings.TrimSpace(norm), "why")) {
+	change := hasChangeWord(norm) || strings.HasPrefix(strings.TrimSpace(norm), "why")
+	switch {
+	case strings.Contains(norm, "task") && strings.Contains(norm, "fail"):
+		return "task_failures"
+	case change && strings.Contains(norm, "cycle time"):
 		return "cycle_time_change"
+	case change && strings.Contains(norm, "ci quality"):
+		return "ci_quality_change"
+	case change && strings.Contains(norm, "ai adoption"):
+		return "ai_adoption_change"
+	case change && strings.Contains(norm, "review latency"):
+		return "review_latency_change"
 	}
 	return ""
 }
@@ -77,28 +116,74 @@ func hasChangeWord(norm string) bool {
 	return false
 }
 
-// askCycleTimeChange answers "why did cycle time change": the given period
-// against the immediately preceding period of equal length.
-func askCycleTimeChange(ctx context.Context, store knowledge.KnowledgeStore, q Query) (Answer, error) {
+// askChange answers one supported question: the given period against the
+// immediately preceding period of equal length, through the shared
+// MetricChange engine.
+func askChange(ctx context.Context, store knowledge.KnowledgeStore, q Query, class, question string) (Answer, error) {
 	pop, err := Population(ctx, store, q.Scope)
 	if err != nil {
 		return Answer{}, err
 	}
 	length := q.To.Sub(q.From)
-	inv := CycleTimeChange(pop,
+	inv := MetricChange(pop,
 		Window{Name: "Previous period", Range: metrics.Window{Start: q.From.Add(-length), End: q.From}},
 		Window{Name: "Current period", Range: metrics.Window{Start: q.From, End: q.To}},
+		questionPrimary[question], question,
 	)
 	ev := append([]evidence.Evidence{}, inv.Primary.Evidence...)
 	for _, f := range inv.Factors {
 		ev = append(ev, f.Evidence...)
 	}
 	return Answer{
-		Question:    q.Text,
-		Class:       "cycle_time_change",
-		Statement:   inv.Statement,
-		Evidence:    ev,
-		Limitations: inv.Limitations,
+		Question:       q.Text,
+		Class:          class,
+		Statement:      inv.Statement,
+		Scope:          q.Scope,
+		From:           q.From,
+		To:             q.To,
+		EpistemicState: inv.State.String(),
+		Evidence:       ev,
+		Limitations:    inv.Limitations,
+	}, nil
+}
+
+// askTaskFailures answers the task-failure question over the given period:
+// failed finished tasks grouped by session, with one evidence entry per
+// failed task and per containing session.
+func askTaskFailures(ctx context.Context, store knowledge.KnowledgeStore, q Query) (Answer, error) {
+	pop, err := Population(ctx, store, q.Scope)
+	if err != nil {
+		return Answer{}, err
+	}
+	win := metrics.Window{Start: q.From, End: q.To}
+	rows := TaskFailures(pop, win)
+	seenTask := map[string]bool{}
+	seenSession := map[string]bool{}
+	var ev []evidence.Evidence
+	for _, t := range pop.AgentTasks {
+		if t.Value.Status != "failed" || t.Value.CompletedAt.IsZero() ||
+			t.Value.CompletedAt.Before(win.Start) || !t.Value.CompletedAt.Before(win.End) {
+			continue
+		}
+		if !seenTask[t.ExternalID] {
+			seenTask[t.ExternalID] = true
+			ev = append(ev, evidence.Evidence{Type: "AgentTask", ObjectIDs: []string{t.ExternalID}, ObservedAt: t.Value.CompletedAt, State: evidence.StateObserved})
+		}
+		if s := pop.TaskSessions[t.ExternalID]; s != "" && !seenSession[s] {
+			seenSession[s] = true
+			ev = append(ev, evidence.Evidence{Type: "CodingSession", ObjectIDs: []string{s}, State: evidence.StateObserved})
+		}
+	}
+	return Answer{
+		Question:       q.Text,
+		Class:          "task_failures",
+		Statement:      taskFailuresStatement(rows),
+		Scope:          q.Scope,
+		From:           q.From,
+		To:             q.To,
+		EpistemicState: evidence.StateObserved.String(), // a raw object report, not a calculation
+		Evidence:       ev,
+		Limitations:    taskLimitations,
 	}, nil
 }
 

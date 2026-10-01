@@ -10,6 +10,15 @@ aikoql-v2/
 # builds
 /ei
 /ei.exe
+/ei.exe~
+
+# generated local board and scratch output
+/board.json
+/board.status
+/30
+
+# local knowledge-base database created when the config path is unset
+/${user_config.KB_PATH}/
 
 # secrets
 .env
@@ -19,3 +28,4 @@ aikoql-v2/
 .vscode/
 .DS_Store
 Thumbs.db
+aikoql.toml

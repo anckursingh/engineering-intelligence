@@ -86,6 +86,41 @@ func toIssue(i *gh.Issue, owner, repo string) ontology.Issue {
 	}
 }
 
+// toDeployment maps a GitHub deployment record. State/status deliberately
+// absent: the deployments list has no terminal state (statuses are a
+// separate endpoint) and nothing consumes it yet.
+func toDeployment(d *gh.Deployment, owner, repo string) ontology.Deployment {
+	return ontology.Deployment{
+		Repository:  repoRef(owner, repo),
+		ID:          d.GetID(),
+		Environment: d.GetEnvironment(),
+		SHA:         d.GetSHA(),
+		Ref:         d.GetRef(),
+		Description: d.GetDescription(),
+		CreatedAt:   ts(d.GetCreatedAt()),
+		UpdatedAt:   ts(d.GetUpdatedAt()),
+	}
+}
+
+// toService derives the product-level service from the GitHub world's only
+// service signal: the environment name, scoped to the repo.
+func toService(owner, repo, env string) ontology.Service {
+	return ontology.Service{Repository: repoRef(owner, repo), Name: env}
+}
+
+func toRelease(r *gh.RepositoryRelease, owner, repo string) ontology.Release {
+	return ontology.Release{
+		Repository:      repoRef(owner, repo),
+		ID:              r.GetID(),
+		TagName:         r.GetTagName(),
+		Name:            r.GetName(),
+		TargetCommitish: r.GetTargetCommitish(),
+		Prerelease:      r.GetPrerelease(),
+		CreatedAt:       ts(r.GetCreatedAt()),
+		PublishedAt:     ts(r.GetPublishedAt()),
+	}
+}
+
 func toCommit(c *gh.RepositoryCommit, owner, repo string) ontology.Commit {
 	comm := c.GetCommit() // nil if GitHub could not resolve the commit object
 	var name, email, message string
@@ -109,6 +144,14 @@ func toCommit(c *gh.RepositoryCommit, owner, repo string) ontology.Commit {
 
 func toPullRequest(p *gh.PullRequest, owner, repo string) ontology.PullRequest {
 	mergedAt := ts(p.GetMergedAt())
+	labels := make([]string, 0, len(p.Labels))
+	for _, l := range p.Labels {
+		labels = append(labels, l.GetName())
+	}
+	requested := make([]string, 0, len(p.RequestedReviewers))
+	for _, u := range p.RequestedReviewers {
+		requested = append(requested, u.GetLogin())
+	}
 	return ontology.PullRequest{
 		Repository: repoRef(owner, repo),
 		Number:     p.GetNumber(),
@@ -117,15 +160,37 @@ func toPullRequest(p *gh.PullRequest, owner, repo string) ontology.PullRequest {
 		State:      p.GetState(),
 		// The list endpoint leaves `merged` nil; merged_at presence is the
 		// authoritative merge signal (dogfood: merged PRs stored as false).
-		Merged:         p.GetMerged() || !mergedAt.IsZero(),
-		AuthorLogin:    p.GetUser().GetLogin(),
-		BaseRef:        p.GetBase().GetRef(),
-		HeadRef:        p.GetHead().GetRef(),
-		MergeCommitSHA: p.GetMergeCommitSHA(),
-		CreatedAt:      ts(p.GetCreatedAt()),
-		UpdatedAt:      ts(p.GetUpdatedAt()),
-		MergedAt:       mergedAt,
+		Merged:             p.GetMerged() || !mergedAt.IsZero(),
+		AuthorLogin:        p.GetUser().GetLogin(),
+		BaseRef:            p.GetBase().GetRef(),
+		HeadRef:            p.GetHead().GetRef(),
+		MergeCommitSHA:     p.GetMergeCommitSHA(),
+		Additions:          p.GetAdditions(),
+		Deletions:          p.GetDeletions(),
+		Labels:             labels,
+		Draft:              p.GetDraft(),
+		RequestedReviewers: requested,
+		CreatedAt:          ts(p.GetCreatedAt()),
+		UpdatedAt:          ts(p.GetUpdatedAt()),
+		MergedAt:           mergedAt,
 	}
+}
+
+// pullDetail is the single-PR GET response: go-github's PullRequest drops
+// merge_method (the REST body carries it, the SDK struct does not), so the
+// raw decode keeps it.
+type pullDetail struct {
+	gh.PullRequest
+	MergeMethod string `json:"merge_method"`
+}
+
+// toPullRequestDetail maps the single-PR GET — the richer record: labels,
+// draft, merge method, requested reviewers. The list endpoint leaves
+// merge_method and requested_reviewers unpopulated.
+func toPullRequestDetail(d *pullDetail, owner, repo string) ontology.PullRequest {
+	pr := toPullRequest(&d.PullRequest, owner, repo)
+	pr.MergeMethod = d.MergeMethod
+	return pr
 }
 
 func toReview(r *gh.PullRequestReview, owner, repo string, prNumber int) ontology.Review {
@@ -136,5 +201,29 @@ func toReview(r *gh.PullRequestReview, owner, repo string, prNumber int) ontolog
 		ReviewerLogin: r.GetUser().GetLogin(),
 		State:         r.GetState(),
 		SubmittedAt:   ts(r.GetSubmittedAt()),
+	}
+}
+
+// toBuild maps a workflow run. The list endpoint carries no completed_at:
+// for a completed run, updated_at IS the completion (GitHub stops touching
+// the record once the run finishes); for an unfinished run there is no
+// completion time, so CompletedAt stays zero and the run is re-normalized
+// on the next sync once it finishes (its updated_at advances past the
+// watermark).
+func toBuild(r *gh.WorkflowRun, owner, repo string) ontology.Build {
+	completed := time.Time{}
+	if r.GetStatus() == "completed" {
+		completed = ts(r.GetUpdatedAt())
+	}
+	return ontology.Build{
+		Repository:  repoRef(owner, repo),
+		ID:          r.GetID(),
+		Name:        r.GetName(),
+		HeadSHA:     r.GetHeadSHA(),
+		Conclusion:  r.GetConclusion(),
+		Status:      r.GetStatus(),
+		StartedAt:   ts(r.GetRunStartedAt()),
+		CompletedAt: completed,
+		HTMLURL:     r.GetHTMLURL(),
 	}
 }

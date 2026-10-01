@@ -24,13 +24,15 @@ import (
 )
 
 // Fixture SHAs (the acme/widgets default branch). Squash/Rebase are the
-// merge-kind variants (§13.3); Dead is a merge SHA absent from history.
+// merge-kind variants (§13.3); Dead is a merge SHA absent from history;
+// PrSha lives only on PR#3's branch — never on the default branch.
 var (
 	ShaA      = strings.Repeat("a", 40)
 	ShaB      = strings.Repeat("b", 40)
 	SquashSha = strings.Repeat("c", 40)
 	RebaseSha = strings.Repeat("d", 40)
 	DeadSha   = strings.Repeat("e", 40)
+	PrSha     = strings.Repeat("f", 40)
 )
 
 func tst(t time.Time) *gh.Timestamp { return &gh.Timestamp{Time: t} }
@@ -53,6 +55,31 @@ type World struct {
 	issue1  *gh.Issue // /issues/{n} on-demand refetch
 	prs     []*gh.PullRequest
 	reviews []*gh.PullRequestReview
+	runs    []*gh.WorkflowRun
+
+	// deployments serves /repos/{repo}/deployments. AddDeployments fills it;
+	// AddDeploymentToOldBuild adds the delta leg (a deployment whose sha
+	// matches a build the second sync run watermark-skips).
+	deployments []*gh.Deployment
+
+	// releases serves /repos/{repo}/releases. AddReleases fills it.
+	releases []*gh.RepositoryRelease
+
+	// prCommits serves /pulls/{n}/commits — the PR's own branch commits,
+	// which the default-branch walk never sees. Absent numbers answer the
+	// empty list, like the real API for a PR with no commits left.
+	prCommits map[int][]*gh.RepositoryCommit
+
+	// prCloses serves /graphql's closingIssuesReferences per PR — the
+	// authoritative issue links, which also cover links the body keywords
+	// miss (timeline events, manual edits). Absent numbers close nothing.
+	prCloses map[int][]int
+
+	// prDetails serves /pulls/{n} as the wire body: the real endpoint's
+	// response carries merge_method/requested_reviewers, which the list
+	// entries above (and go-github's PullRequest struct) lack. Absent
+	// numbers fall back to the list entry, like the real API's shape.
+	prDetails map[int]map[string]any
 
 	userOwner      bool // /orgs/{owner} 404s; /users/{owner} serves the account
 	failOrgOnce    bool
@@ -164,13 +191,66 @@ func NewWorld(t *testing.T) *World {
 			UpdatedAt:      tst(t0.Add(31 * time.Hour)),
 			MergedAt:       tst(t0.Add(31 * time.Hour)),
 		}},
-		reviews: []*gh.PullRequestReview{{
-			ID:          int64ptr(1001),
-			User:        &gh.User{Login: strptr("ann")},
-			State:       strptr("APPROVED"),
-			HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1001"),
-			SubmittedAt: tst(t0.Add(30*time.Hour + 30*time.Minute)),
-		}},
+		reviews: []*gh.PullRequestReview{
+			{
+				ID:          int64ptr(1001),
+				User:        &gh.User{Login: strptr("ann")},
+				State:       strptr("APPROVED"),
+				HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1001"),
+				SubmittedAt: tst(t0.Add(30*time.Hour + 30*time.Minute)),
+			},
+			{
+				// The dismissed leg of the lifecycle: state flows verbatim.
+				ID:          int64ptr(1002),
+				User:        &gh.User{Login: strptr("ann")},
+				State:       strptr("DISMISSED"),
+				HTMLURL:     strptr("https://github.com/acme/widgets/pull/3#pullrequestreview-1002"),
+				SubmittedAt: tst(t0.Add(30*time.Hour + 45*time.Minute)),
+			},
+		},
+		// PR#3's branch commit: only the PR's commit list carries it (the
+		// default-branch walk never sees PrSha). Same author as ShaA — the
+		// sync must resolve to the one ann, not a second engineer.
+		prCommits: map[int][]*gh.RepositoryCommit{
+			3: {{
+				SHA:     strptr(PrSha),
+				HTMLURL: strptr("https://github.com/acme/widgets/commit/" + PrSha),
+				Author:  &gh.User{Login: strptr("ann")},
+				Commit: &gh.Commit{
+					Message: strptr("fix the wobbles"),
+					Author: &gh.CommitAuthor{
+						Name:  strptr("Ann Coder"),
+						Email: strptr("1234567+ann@users.noreply.github.com"),
+						Date:  tst(t0.Add(29 * time.Hour)),
+					},
+				},
+			}},
+		},
+		prCloses: map[int][]int{3: {1}},
+		// The single-PR GET for #3: the richer record (labels/draft/merge
+		// method/requested reviewers) in wire form — a raw map, since the
+		// connector decodes it directly.
+		prDetails: map[int]map[string]any{
+			3: {
+				"number":              3,
+				"title":               "Fix wobbles",
+				"body":                "Closes #1",
+				"state":               "closed",
+				"merged":              true,
+				"user":                map[string]any{"login": "ann"},
+				"base":                map[string]any{"ref": "main"},
+				"head":                map[string]any{"ref": "fix/wobbles"},
+				"merge_commit_sha":    ShaB,
+				"labels":              []map[string]any{{"name": "enhancement"}},
+				"draft":               false,
+				"merge_method":        "squash",
+				"requested_reviewers": []map[string]any{{"login": "bob"}},
+				"html_url":            "https://github.com/acme/widgets/pull/3",
+				"created_at":          t0.Add(30 * time.Hour).Format(time.RFC3339),
+				"updated_at":          t0.Add(31 * time.Hour).Format(time.RFC3339),
+				"merged_at":           t0.Add(31 * time.Hour).Format(time.RFC3339),
+			},
+		},
 	}
 	w.server = httptest.NewServer(w)
 	t.Cleanup(w.server.Close)
@@ -309,12 +389,14 @@ func (w *World) AddMergeVariants() {
 }
 
 // AddLinkVariants appends the §13.4 linking PRs: #7 references one issue
-// twice, #8 references an issue that does not exist.
+// twice (authoritative data repeats the node), #8 references an issue that
+// does not exist, #9's body carries no close keyword but GitHub links it
+// anyway (timeline event — the case the body regex could never see).
 func (w *World) AddLinkVariants() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	t0 := time.Now().UTC().Add(-5 * 24 * time.Hour)
-	for i, body := range []string{"Closes #2, fixes #2", "Closes #99"} {
+	for i, body := range []string{"Closes #2, fixes #2", "Closes #99", "No linked issue here"} {
 		w.prs = append(w.prs, &gh.PullRequest{
 			Number:    intptr(7 + i),
 			Title:     strptr("Link variant"),
@@ -328,6 +410,170 @@ func (w *World) AddLinkVariants() {
 			UpdatedAt: tst(t0.Add(3 * time.Hour)),
 		})
 	}
+	if w.prCloses == nil {
+		w.prCloses = map[int][]int{}
+	}
+	w.prCloses[7] = []int{2, 2}
+	w.prCloses[8] = []int{99}
+	w.prCloses[9] = []int{1}
+}
+
+// AddJiraMentionPR appends the Jira cross-linking fixture: PR #10's branch,
+// title, and body all carry the SCRUM-2 key — the signal the Jira-link pass
+// matches against ingested JiraIssue objects. No prDetails entry: the list
+// record serves the pullDetail fallback, exactly like AddLinkVariants.
+func (w *World) AddJiraMentionPR() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	w.prs = append(w.prs, &gh.PullRequest{
+		Number:    intptr(10),
+		Title:     strptr("Ship the launch — SCRUM-2"),
+		Body:      strptr("Solves SCRUM-2"),
+		State:     strptr("open"),
+		User:      &gh.User{Login: strptr("ann")},
+		Base:      &gh.PullRequestBranch{Ref: strptr("main")},
+		Head:      &gh.PullRequestBranch{Ref: strptr("SCRUM-2-aikoql-test")},
+		HTMLURL:   strptr("https://github.com/acme/widgets/pull/10"),
+		CreatedAt: tst(t0.Add(2 * time.Hour)),
+		UpdatedAt: tst(t0.Add(3 * time.Hour)),
+	})
+}
+
+// AddBuilds appends the CI fixture: one passed PR-linked run, one failed run,
+// one in-progress run, one cancelled run (t0 = now − 10d, matching
+// NewWorld's clock) — the outcome-vocabulary tests need every conclusion.
+func (w *World) AddBuilds() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	w.runs = append(w.runs,
+		&gh.WorkflowRun{
+			ID:           int64ptr(200),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("completed"),
+			Conclusion:   strptr("success"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/200"),
+			RunStartedAt: tst(t0.Add(32 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(33 * time.Hour)),
+			PullRequests: []*gh.PullRequest{{Number: intptr(3)}},
+		},
+		&gh.WorkflowRun{
+			ID:           int64ptr(201),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("completed"),
+			Conclusion:   strptr("failure"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/201"),
+			RunStartedAt: tst(t0.Add(34 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(35 * time.Hour)),
+		},
+		&gh.WorkflowRun{
+			ID:           int64ptr(202),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("in_progress"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/202"),
+			RunStartedAt: tst(t0.Add(36 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(36 * time.Hour)),
+		},
+		&gh.WorkflowRun{
+			ID:           int64ptr(203),
+			Name:         strptr("CI"),
+			HeadSHA:      strptr(ShaB),
+			Status:       strptr("completed"),
+			Conclusion:   strptr("cancelled"),
+			HTMLURL:      strptr("https://github.com/acme/widgets/actions/runs/203"),
+			RunStartedAt: tst(t0.Add(37 * time.Hour)),
+			UpdatedAt:    tst(t0.Add(37 * time.Hour)),
+		},
+	)
+}
+
+// FinishInProgressBuild completes run 202 (the delta test's second-run state).
+func (w *World) FinishInProgressBuild() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runs[2].Status = strptr("completed")
+	w.runs[2].Conclusion = strptr("failure")
+	w.runs[2].UpdatedAt = tst(time.Now().UTC())
+}
+
+// AddDeployments appends the deployment fixture: #300 to production at
+// ShaB (build 200's head sha — the fresh-build link) and #301 to staging
+// at DeadSha (no build at that sha — must leave no PRODUCED edge).
+func (w *World) AddDeployments() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	w.deployments = append(w.deployments,
+		&gh.Deployment{
+			ID:          int64ptr(300),
+			SHA:         strptr(ShaB),
+			Ref:         strptr("main"),
+			Environment: strptr("production"),
+			URL:         strptr("https://api.github.com/repos/acme/widgets/deployments/300"),
+			CreatedAt:   tst(t0.Add(38 * time.Hour)),
+			UpdatedAt:   tst(t0.Add(38 * time.Hour)),
+		},
+		&gh.Deployment{
+			ID:          int64ptr(301),
+			SHA:         strptr(DeadSha),
+			Ref:         strptr("main"),
+			Environment: strptr("staging"),
+			URL:         strptr("https://api.github.com/repos/acme/widgets/deployments/301"),
+			CreatedAt:   tst(t0.Add(39 * time.Hour)),
+			UpdatedAt:   tst(t0.Add(39 * time.Hour)),
+		},
+	)
+}
+
+// AddDeploymentToOldBuild adds the delta leg between runs: a deployment at
+// ShaB created now — its build (run 200) predates the first run's watermark,
+// so the second run must link it through the store, not the fresh-run map.
+func (w *World) AddDeploymentToOldBuild() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now().UTC()
+	w.deployments = append(w.deployments, &gh.Deployment{
+		ID:          int64ptr(302),
+		SHA:         strptr(ShaB),
+		Ref:         strptr("main"),
+		Environment: strptr("production"),
+		URL:         strptr("https://api.github.com/repos/acme/widgets/deployments/302"),
+		CreatedAt:   tst(now),
+		UpdatedAt:   tst(now),
+	})
+}
+
+// AddReleases appends the release fixture: one stable release at ShaB and
+// one prerelease targeting main (target_commitish is a branch name there —
+// it must stay a property, never a commit edge).
+func (w *World) AddReleases() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t0 := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	w.releases = append(w.releases,
+		&gh.RepositoryRelease{
+			ID:              700,
+			TagName:         "v1.0.0",
+			Name:            strptr("First stable"),
+			TargetCommitish: ShaB,
+			Prerelease:      false,
+			CreatedAt:       gh.Timestamp{Time: t0.Add(40 * time.Hour)},
+			PublishedAt:     tst(t0.Add(41 * time.Hour)),
+		},
+		&gh.RepositoryRelease{
+			ID:              701,
+			TagName:         "v2.0.0-rc1",
+			Name:            strptr("Release candidate"),
+			TargetCommitish: "main",
+			Prerelease:      true,
+			CreatedAt:       gh.Timestamp{Time: t0.Add(42 * time.Hour)},
+			PublishedAt:     tst(t0.Add(43 * time.Hour)),
+		},
+	)
 }
 
 // FailFirstOrgCallOnce makes the first org call return a 403 rate-limit
@@ -382,6 +628,31 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	switch {
+	case r.URL.Path == "/graphql":
+		// closingIssuesReferences: answer from the request's variables —
+		// the authoritative issue links for the named PR.
+		var req struct {
+			Variables struct {
+				Number int `json:"number"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(rw, "bad graphql body", http.StatusBadRequest)
+			return
+		}
+		nodes := []map[string]any{}
+		for _, n := range w.prCloses[req.Variables.Number] {
+			nodes = append(nodes, map[string]any{"number": n})
+		}
+		encode(rw, map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"closingIssuesReferences": map[string]any{"nodes": nodes},
+					},
+				},
+			},
+		})
 	case r.URL.Path == "/orgs/acme":
 		w.orgCalls++
 		if w.userOwner {
@@ -415,6 +686,17 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, w.repos)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/pulls/") && strings.HasSuffix(r.URL.Path, "/commits"):
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/acme/widgets/pulls/"), "/commits"))
+		if err != nil {
+			http.NotFound(rw, r)
+			return
+		}
+		if cs, ok := w.prCommits[n]; ok {
+			encode(rw, cs)
+			return
+		}
+		encode(rw, []*gh.RepositoryCommit{})
 	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/commits"):
 		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/acme/"), "/commits")
 		if w.emptyRepos[name] {
@@ -449,6 +731,43 @@ func (w *World) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encode(rw, []*gh.PullRequestReview{})
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/pulls/"):
+		// single-PR GET: the wire detail when the world enriches it, the
+		// list entry otherwise.
+		n, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/repos/acme/widgets/pulls/"))
+		if err != nil {
+			http.NotFound(rw, r)
+			return
+		}
+		if d, ok := w.prDetails[n]; ok {
+			encode(rw, d)
+			return
+		}
+		for _, p := range w.prs {
+			if p.GetNumber() == n {
+				encode(rw, p)
+				return
+			}
+		}
+		http.NotFound(rw, r)
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/deployments"):
+		if r.URL.Path == "/repos/acme/widgets/deployments" {
+			encode(rw, w.deployments)
+			return
+		}
+		encode(rw, []*gh.Deployment{})
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/releases"):
+		if r.URL.Path == "/repos/acme/widgets/releases" {
+			encode(rw, w.releases)
+			return
+		}
+		encode(rw, []*gh.RepositoryRelease{})
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/") && strings.HasSuffix(r.URL.Path, "/actions/runs"):
+		if r.URL.Path == "/repos/acme/widgets/actions/runs" {
+			encode(rw, &gh.WorkflowRuns{TotalCount: intptr(len(w.runs)), WorkflowRuns: w.runs})
+			return
+		}
+		encode(rw, &gh.WorkflowRuns{WorkflowRuns: []*gh.WorkflowRun{}})
 	default:
 		http.NotFound(rw, r)
 	}

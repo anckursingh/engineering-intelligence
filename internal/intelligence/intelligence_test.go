@@ -153,6 +153,7 @@ func TestCycleTimeChangeFactorAppeared(t *testing.T) {
 	want := "Cycle time increased from 2.0 to 4.0 days. " +
 		"Review latency appeared in Month B at 2.0 days. " +
 		"Throughput decreased by 33.3%. " +
+		"Review cycles appeared in Month B at 0.0 cycles. " +
 		"The data supports an association, but does not establish causality."
 	if got.Statement != want {
 		t.Errorf("appeared statement = %q\nwant               %q", got.Statement, want)
@@ -162,6 +163,7 @@ func TestCycleTimeChangeFactorAppeared(t *testing.T) {
 	want = "Cycle time increased from 2.0 to 4.0 days. " +
 		"Review latency disappeared in Month B. " +
 		"Throughput decreased by 33.3%. " +
+		"Review cycles disappeared in Month B. " +
 		"The data supports an association, but does not establish causality."
 	if got.Statement != want {
 		t.Errorf("disappeared statement = %q\nwant                 %q", got.Statement, want)
@@ -233,6 +235,135 @@ func TestCycleTimeChangeAIFactor(t *testing.T) {
 	}
 	if f := got.Factors[2]; f.Metric != "ai_assisted_pr_pct" || f.From != 0.0 || f.To != 100.0 {
 		t.Errorf("AI factor = %+v, want ai_assisted_pr_pct 0.0→100.0", f)
+	}
+}
+
+// ciBuild builds one verdict Build entity completed at the given time.
+func ciBuild(extID string, num int, conclusion string, completed time.Time) metrics.Entity[ontology.Build] {
+	return metrics.Entity[ontology.Build]{
+		ExternalID: extID,
+		Value: ontology.Build{
+			Repository: "acme/widgets", ID: int64(num),
+			Conclusion: conclusion, CompletedAt: completed,
+		},
+	}
+}
+
+// TestMetricChangeCIQuality (Milestone F, item 44): any supported question
+// runs the shared two-window engine with its own primary — here CI quality,
+// 75% pass in Month A falling to 25% in Month B — and the primary never
+// doubles as one of its own factors.
+func TestMetricChangeCIQuality(t *testing.T) {
+	popA, a := monthA()
+	popB, b := monthB()
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	pop := metrics.Population{
+		PullRequests: append(append([]metrics.Entity[ontology.PullRequest]{}, popA.PullRequests...), popB.PullRequests...),
+		Reviews:      append(append([]metrics.Entity[ontology.Review]{}, popA.Reviews...), popB.Reviews...),
+		Builds: []metrics.Entity[ontology.Build]{
+			// Month A: 3 pass, 1 fail → 75%.
+			ciBuild("github.com:build:acme/widgets:1", 1, "success", base.Add(2*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:2", 2, "success", base.Add(4*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:3", 3, "success", base.Add(6*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:4", 4, "failure", base.Add(8*24*time.Hour)),
+			// Month B: 1 pass, 3 fail → 25%.
+			ciBuild("github.com:build:acme/widgets:5", 5, "success", base.Add(33*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:6", 6, "failure", base.Add(35*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:7", 7, "failure", base.Add(37*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:8", 8, "failure", base.Add(39*24*time.Hour)),
+		},
+	}
+	got := MetricChange(pop, a, b, "ci_pass_rate", QuestionCIQuality)
+
+	want := "CI pass rate decreased from 75.0 to 25.0 %. " +
+		"Cycle time increased by 100.0%. " +
+		"Review latency increased by 100.0%. " +
+		"Throughput decreased by 33.3%. " +
+		"The data supports an association, but does not establish causality."
+	if got.Statement != want {
+		t.Errorf("statement = %q\nwant       %q", got.Statement, want)
+	}
+	if got.Question != QuestionCIQuality {
+		t.Errorf("question = %q, want %q", got.Question, QuestionCIQuality)
+	}
+	if got.Primary.Metric != "ci_pass_rate" || got.Primary.From != 75.0 || got.Primary.To != 25.0 {
+		t.Errorf("primary = %+v, want ci_pass_rate 75.0→25.0", got.Primary)
+	}
+	if len(got.Factors) != 3 {
+		t.Fatalf("factors = %d, want 3 (cycle_time, review_latency, throughput)", len(got.Factors))
+	}
+	for _, f := range got.Factors {
+		if f.Metric == "ci_pass_rate" {
+			t.Errorf("primary listed as its own factor: %+v", f)
+		}
+	}
+}
+
+// TestMetricChangeMissingData (Milestone F): the honest missing-data
+// statement names the primary metric and the first window lacking data.
+func TestMetricChangeMissingData(t *testing.T) {
+	popA, a := monthA()
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	pop := metrics.Population{
+		PullRequests: popA.PullRequests,
+		Reviews:      popA.Reviews,
+		Builds: []metrics.Entity[ontology.Build]{
+			ciBuild("github.com:build:acme/widgets:1", 1, "success", base.Add(2*24*time.Hour)),
+			ciBuild("github.com:build:acme/widgets:2", 2, "failure", base.Add(4*24*time.Hour)),
+		},
+	}
+	got := MetricChange(pop, a, Window{Name: "Month B", Range: metrics.Window{
+		Start: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+	}}, "ci_pass_rate", QuestionCIQuality)
+	if got.Statement != "Not enough ci_pass_rate data in Month B to investigate." {
+		t.Errorf("statement = %q", got.Statement)
+	}
+	if got.Question != QuestionCIQuality {
+		t.Errorf("question = %q, want %q", got.Question, QuestionCIQuality)
+	}
+}
+
+func TestMetricChangeFormatsShortReviewLatencyAsMinutes(t *testing.T) {
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	a := Window{Name: "Previous period", Range: metrics.Window{Start: base, End: base.Add(31 * 24 * time.Hour)}}
+	b := Window{Name: "Current period", Range: metrics.Window{Start: base.Add(31 * 24 * time.Hour), End: base.Add(61 * 24 * time.Hour)}}
+	pop := metrics.Population{
+		PullRequests: []metrics.Entity[ontology.PullRequest]{
+			pr("pr-a", 1, base.Add(10*24*time.Hour), base.Add(11*24*time.Hour)),
+			pr("pr-b", 2, base.Add(40*24*time.Hour), base.Add(41*24*time.Hour)),
+		},
+		Reviews: []metrics.Entity[ontology.Review]{
+			review("review-a", 1, base.Add(10*24*time.Hour+129*time.Second)),
+			review("review-b", 2, base.Add(40*24*time.Hour+879*time.Second)),
+		},
+	}
+
+	got := MetricChange(pop, a, b, "review_latency", QuestionReviewLatency)
+	want := "Review latency increased from 2.15 to 14.65 minutes. " +
+		"The data supports an association, but does not establish causality."
+	if got.Statement != want {
+		t.Errorf("statement = %q\nwant       %q", got.Statement, want)
+	}
+}
+
+func TestFormatValueUsesReadableDurationUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		value     float64
+		wantValue string
+		wantUnit  string
+	}{
+		{name: "sub-hour", value: 0.00149305555555556, wantValue: "2.15", wantUnit: "minutes"},
+		{name: "sub-day", value: 0.5, wantValue: "12.0", wantUnit: "hours"},
+		{name: "day", value: 1, wantValue: "1.0", wantUnit: "days"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, unit := formatValue(tc.value, "days")
+			if value != tc.wantValue || unit != tc.wantUnit {
+				t.Errorf("formatValue = %q %q, want %q %q", value, unit, tc.wantValue, tc.wantUnit)
+			}
+		})
 	}
 }
 

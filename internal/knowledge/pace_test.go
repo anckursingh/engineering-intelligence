@@ -28,6 +28,15 @@ type scriptDb struct {
 	res   []scriptRes
 }
 
+type alwaysRateLimitedDB struct {
+	calls int
+}
+
+func (s *alwaysRateLimitedDB) CallTool(context.Context, string, any) (json.RawMessage, error) {
+	s.calls++
+	return nil, rateLimitErr()
+}
+
 func (s *scriptDb) CallTool(_ context.Context, _ string, _ any) (json.RawMessage, error) {
 	r := s.res[s.calls]
 	s.calls++
@@ -36,13 +45,17 @@ func (s *scriptDb) CallTool(_ context.Context, _ string, _ any) (json.RawMessage
 
 // sleepRec records requested sleeps; err, when set, is returned instead.
 type sleepRec struct {
-	durs []time.Duration
-	err  error
+	durs     []time.Duration
+	err      error
+	errAfter int
 }
 
 func (s *sleepRec) sleep(_ context.Context, d time.Duration) error {
 	s.durs = append(s.durs, d)
-	return s.err
+	if s.err != nil && (s.errAfter == 0 || len(s.durs) >= s.errAfter) {
+		return s.err
+	}
+	return nil
 }
 
 func retrying(db aikoqlDB, sleep func(context.Context, time.Duration) error) *rateLimitClient {
@@ -125,5 +138,21 @@ func TestRateLimitSleepHonorsContext(t *testing.T) {
 	}
 	if len(sl.durs) != 1 {
 		t.Errorf("sleeps = %v, want one attempt", sl.durs)
+	}
+}
+
+func TestRateLimitRetryExhaustion(t *testing.T) {
+	db := &alwaysRateLimitedDB{}
+	const wantRetries = 5
+	sl := &sleepRec{err: context.Canceled, errAfter: wantRetries + 1}
+	_, err := retrying(db, sl.sleep).CallTool(context.Background(), "get", nil)
+	if !isRateLimit(err) {
+		t.Fatalf("CallTool error = %v, want the final rate-limit error", err)
+	}
+	if want := wantRetries + 1; db.calls != want {
+		t.Errorf("inner calls = %d, want %d (initial call plus retry budget)", db.calls, want)
+	}
+	if want := wantRetries; len(sl.durs) != want {
+		t.Errorf("sleeps = %d, want %d (no sleep after exhaustion)", len(sl.durs), want)
 	}
 }

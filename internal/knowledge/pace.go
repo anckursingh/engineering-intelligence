@@ -22,6 +22,7 @@ import (
 const (
 	rateLimitBackoffStart = time.Second
 	rateLimitBackoffMax   = 8 * time.Second
+	maxRateLimitRetries   = 5
 )
 
 // isRateLimit reports whether err is the server's rate-policy rejection,
@@ -40,14 +41,19 @@ type rateLimitClient struct {
 
 func (r *rateLimitClient) CallTool(ctx context.Context, name string, args any) (json.RawMessage, error) {
 	backoff := rateLimitBackoffStart
+	retries := 0
 	for {
 		raw, err := r.db.CallTool(ctx, name, args)
 		if !isRateLimit(err) {
 			return raw, err
 		}
+		if retries >= maxRateLimitRetries {
+			return nil, fmt.Errorf("aikoql rate limit after %d retries: %w", retries, err)
+		}
 		if err := r.sleep(ctx, backoff); err != nil {
 			return nil, fmt.Errorf("aikoql rate limit: %w", err)
 		}
+		retries++
 		if backoff *= 2; backoff > rateLimitBackoffMax {
 			backoff = rateLimitBackoffMax
 		}

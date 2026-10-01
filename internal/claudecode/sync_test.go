@@ -146,7 +146,7 @@ func TestParseSession(t *testing.T) {
 		t.Fatalf("runs = %d, want 3 (one per tool-calling assistant message)", len(sess.runs))
 	}
 	for _, r := range sess.runs {
-		if r.Agent != model || r.Status != "completed" || r.CostUSD != 0 {
+		if r.Agent != model || r.Status != "completed" || r.CostUSD != 0 || r.CostReported {
 			t.Errorf("run = %+v", r)
 		}
 	}
@@ -288,8 +288,8 @@ func TestSyncWritesTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if res.Sessions != 1 || res.Relationships != 2 || res.Unlinked != 0 {
-		t.Errorf("result = %+v, want 1 session, 2 edges, 0 unlinked", res)
+	if res.Sessions != 1 || res.Relationships != 11 || res.Unlinked != 0 {
+		t.Errorf("result = %+v, want 1 session, 11 edges (2 AI_CONTRIBUTES + 2 AUTHORED + 7 session containment), 0 unlinked", res)
 	}
 	wantCounts := map[string]int{
 		"CodingSession": 1, "Interaction": 1, "AgentRun": 3, "AgentTask": 3, "CodeContribution": 2,
@@ -340,6 +340,94 @@ func TestSyncUnlinkedContribution(t *testing.T) {
 	}
 	if res.Counts["CodeContribution"].New != 2 {
 		t.Errorf("contributions = %+v, want 2 stored even when unlinked", res.Counts["CodeContribution"])
+	}
+}
+
+// TestSyncAgentTaskLinks: the task whose tool_use produced a code edit links
+// AUTHORED to its contribution — the Milestone D graph AgentTask →
+// CodeContribution → PR reconstructs from telemetry alone (a non-code task
+// produces nothing).
+func TestSyncAgentTaskLinks(t *testing.T) {
+	store := knowledge.NewMemory()
+	seedPR(t, store)
+	dir := writeTranscript(t, "s1.jsonl", fixtureTranscript())
+	if _, err := Sync(context.Background(), syncCfg(dir, store)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	task1, err := store.GetByExternalID(context.Background(), "ei.com:agent-task:claude-code:toolu_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), task1.Koid, string(ontology.RelAuthored), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatalf("traverse: %v", err)
+	}
+	if len(got) != 1 || got[0].ExternalID != "ei.com:ai-contribution:claude-code:s1:toolu_1" {
+		t.Errorf("task1 AUTHORED = %v, want exactly its contribution", got)
+	}
+
+	// The full Milestone D chain: the contribution reaches its PR.
+	contrib, err := store.GetByExternalID(context.Background(), "ei.com:ai-contribution:claude-code:s1:toolu_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Traverse(context.Background(), contrib.Koid, string(ontology.RelAIContributes), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatalf("traverse: %v", err)
+	}
+	if len(got) != 1 || got[0].ExternalID != prExt {
+		t.Errorf("contribution AI_CONTRIBUTES = %v, want the PR", got)
+	}
+
+	// toolu_2 (Bash) created no code: no AUTHORED outbound.
+	task2, err := store.GetByExternalID(context.Background(), "ei.com:agent-task:claude-code:toolu_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Traverse(context.Background(), task2.Koid, string(ontology.RelAuthored), knowledge.Outbound, 1)
+	if err != nil || len(got) != 0 {
+		t.Errorf("task2 AUTHORED = %v, %v, want none", got, err)
+	}
+}
+
+// TestSyncSessionContainment: the session contains its interactions, runs
+// and tasks — the graph path the population walk (intelligence) uses to
+// reach telemetry from a PR-scoped contribution (Milestone E board).
+func TestSyncSessionContainment(t *testing.T) {
+	store := knowledge.NewMemory()
+	dir := writeTranscript(t, "s1.jsonl", fixtureTranscript())
+	if _, err := Sync(context.Background(), syncCfg(dir, store)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	session, err := store.GetByExternalID(context.Background(), "ei.com:coding-session:claude-code:s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[ontology.RelType][]string{
+		ontology.RelContainsInteraction: {"ei.com:interaction:claude-code:u1"},
+		ontology.RelContainsRun:         {"ei.com:agent-run:claude-code:a1", "ei.com:agent-run:claude-code:a2", "ei.com:agent-run:claude-code:a3"},
+		ontology.RelContainsTask:        {"ei.com:agent-task:claude-code:toolu_1", "ei.com:agent-task:claude-code:toolu_2", "ei.com:agent-task:claude-code:toolu_3"},
+	}
+	for rel, ids := range want {
+		got, err := store.Traverse(context.Background(), session.Koid, string(rel), knowledge.Outbound, 1)
+		if err != nil {
+			t.Fatalf("traverse %s: %v", rel, err)
+		}
+		if len(got) != len(ids) {
+			t.Fatalf("%s = %d children, want %d", rel, len(got), len(ids))
+		}
+		for _, ko := range got {
+			found := false
+			for _, id := range ids {
+				if ko.ExternalID == id {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s reached unexpected %s", rel, ko.ExternalID)
+			}
+		}
 	}
 }
 

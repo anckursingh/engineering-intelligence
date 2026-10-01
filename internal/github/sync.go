@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +29,7 @@ type Config struct {
 	Sleep          func(time.Duration)      // test seam; nil = real sleep
 	Store          knowledge.KnowledgeStore // nil = in-memory dev store
 	Tenant         string                   // optional: scopes the store to one tenant (§8)
+	JiraSite       string                   // optional Jira host: enables PR → Jira-issue links by key mention
 }
 
 // Count tallies one entity type over a run.
@@ -49,11 +49,6 @@ type SyncResult struct {
 	Checkpoint    *checkpoint.Checkpoint
 }
 
-// closeRefRe matches GitHub close keywords in PR bodies.
-// ponytail: body-only regex misses timeline-linked issues; upgrade path is
-// GraphQL ClosingIssuesReferences.
-var closeRefRe = regexp.MustCompile(`(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b`)
-
 type syncer struct {
 	ctx      context.Context
 	client   *Client
@@ -66,6 +61,14 @@ type syncer struct {
 
 	shaToCommit map[string]string // sha → commit koid (merge-commit lookup)
 	issueKoids  map[int]string    // issue number → koid, per repo
+	jiraSite    string            // cfg.JiraSite; empty disables PR → Jira-issue links
+
+	// Build→deployment sha links. Every listed run records here BEFORE the
+	// watermark gate (fresh and skipped alike): a deployment at a sha whose
+	// build predates the window still links through the store lookup below.
+	// Scoped per repo at the top of syncCI.
+	buildRunIDsBySHA map[string][]int64 // lowercased sha → workflow run ids
+	buildKoids       map[int64]string   // run id → build koid, fresh runs only
 }
 
 // upsert counts New/Updated honestly: the store bumps Version only when the
@@ -154,14 +157,17 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		store = knowledge.WithTenant(store, cfg.Tenant)
 	}
 	s := &syncer{
-		ctx:         ctx,
-		client:      client,
-		store:       store,
-		run:         run,
-		resolver:    identity.NewResolver(store, run, "github", ""),
-		counts:      map[string]Count{},
-		shaToCommit: map[string]string{},
-		issueKoids:  map[int]string{},
+		ctx:              ctx,
+		client:           client,
+		store:            store,
+		run:              run,
+		resolver:         identity.NewResolver(store, run, "github", ""),
+		counts:           map[string]Count{},
+		shaToCommit:      map[string]string{},
+		issueKoids:       map[int]string{},
+		buildRunIDsBySHA: map[string][]int64{},
+		buildKoids:       map[int64]string{},
+		jiraSite:         cfg.JiraSite,
 	}
 
 	// Owner account: the org endpoint first, the user endpoint on 404 —
@@ -254,6 +260,15 @@ func Sync(ctx context.Context, cfg Config) (*SyncResult, error) {
 		if err := s.syncPRs(cfg.Owner, name, repoKoid, watermark); err != nil {
 			return nil, fmt.Errorf("github: sync pull requests %s: %w", key, err)
 		}
+		if err := s.syncCI(cfg.Owner, name, repoKoid, watermark); err != nil {
+			return nil, fmt.Errorf("github: sync CI runs %s: %w", key, err)
+		}
+		if err := s.syncDeployments(cfg.Owner, name, repoKoid); err != nil {
+			return nil, fmt.Errorf("github: sync deployments %s: %w", key, err)
+		}
+		if err := s.syncReleases(cfg.Owner, name, repoKoid); err != nil {
+			return nil, fmt.Errorf("github: sync releases %s: %w", key, err)
+		}
 	}
 
 	// Advance the checkpoint only after a fully successful run: a crash
@@ -316,31 +331,8 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 			ck.Github.Repos[key] = newHead
 		}
 		for _, c := range batch {
-			commitOnt := toCommit(c, owner, repo)
-			ko, err := commitOnt.KnowledgeObject(ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
-			if err != nil {
+			if _, err := s.syncCommit(c, owner, repo); err != nil {
 				return err
-			}
-			commitKoid, err := s.upsert(ko)
-			if err != nil {
-				return err
-			}
-			s.shaToCommit[commitOnt.SHA] = commitKoid
-
-			comm := c.GetCommit()
-			name, email := "", ""
-			if comm != nil {
-				name, email = comm.GetAuthor().GetName(), comm.GetAuthor().GetEmail()
-			}
-			p := identity.Resolve(name, email, c.GetAuthor().GetLogin())
-			engKoid, err := s.engineer(p, ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
-			if err != nil {
-				return err
-			}
-			if engKoid != "" {
-				if err := s.relate(engKoid, commitKoid, ontology.RelAuthored); err != nil {
-					return err
-				}
 			}
 		}
 		if resp.NextPage == 0 {
@@ -349,6 +341,39 @@ func (s *syncer) syncCommits(owner, repo, branch string, ck *checkpoint.Checkpoi
 		page = resp.NextPage
 	}
 	return nil
+}
+
+// syncCommit upserts one repository commit, records its koid for merge
+// lookup, and relates its author. Shared by the default-branch walk and the
+// per-PR commit lists.
+func (s *syncer) syncCommit(c *gh.RepositoryCommit, owner, repo string) (string, error) {
+	commitOnt := toCommit(c, owner, repo)
+	ko, err := commitOnt.KnowledgeObject(ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
+	if err != nil {
+		return "", err
+	}
+	commitKoid, err := s.upsert(ko)
+	if err != nil {
+		return "", err
+	}
+	s.shaToCommit[commitOnt.SHA] = commitKoid
+
+	comm := c.GetCommit()
+	name, email := "", ""
+	if comm != nil {
+		name, email = comm.GetAuthor().GetName(), comm.GetAuthor().GetEmail()
+	}
+	p := identity.Resolve(name, email, c.GetAuthor().GetLogin())
+	engKoid, err := s.engineer(p, ontology.NewProvenance(c.GetHTMLURL(), commitOnt.CommittedAt))
+	if err != nil {
+		return "", err
+	}
+	if engKoid != "" {
+		if err := s.relate(engKoid, commitKoid, ontology.RelAuthored); err != nil {
+			return "", err
+		}
+	}
+	return commitKoid, nil
 }
 
 func (s *syncer) syncIssues(owner, repo string, watermark time.Time) error {
@@ -404,15 +429,29 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 		return err
 	}
 	for _, p := range prs {
-		prOnt := toPullRequest(p, owner, repo)
-		if !watermark.IsZero() && prOnt.UpdatedAt.Before(watermark) {
+		if !watermark.IsZero() && ts(p.GetUpdatedAt()).Before(watermark) {
 			c := s.counts["PullRequest"]
 			c.Skipped++
 			s.counts["PullRequest"] = c
 			continue
 		}
 
-		ko, err := prOnt.KnowledgeObject(ontology.NewProvenance(p.GetHTMLURL(), prOnt.UpdatedAt))
+		// The list leaves merge_method and requested_reviewers unpopulated;
+		// the single-PR GET carries them — the richer record. One GET per
+		// changed PR, gated by the watermark above. A PR deleted between the
+		// list and the GET is skipped, not an error.
+		detail, _, err := retry(s.ctx, s.client, "pulls.get", func() (*pullDetail, *gh.Response, error) {
+			return s.client.pullDetail(s.ctx, owner, repo, p.GetNumber())
+		})
+		if err != nil {
+			if isNotFound(err) {
+				continue
+			}
+			return err
+		}
+		prOnt := toPullRequestDetail(detail, owner, repo)
+
+		ko, err := prOnt.KnowledgeObject(ontology.NewProvenance(detail.GetHTMLURL(), prOnt.UpdatedAt))
 		if err != nil {
 			return err
 		}
@@ -436,7 +475,28 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 			}
 		}
 
+		// Requested reviewers: the PR's current request snapshot — GitHub
+		// keeps no request history or timestamps, so this is the request set
+		// at sync time (the submitted states live on Review.State, including
+		// DISMISSED; a requested reviewer never counts as having reviewed).
+		for _, login := range prOnt.RequestedReviewers {
+			person := identity.Resolve("", "", login)
+			engKoid, err := s.engineer(person, ontology.NewProvenance(detail.GetHTMLURL(), prOnt.UpdatedAt))
+			if err != nil {
+				return err
+			}
+			if err := s.relate(prKoid, engKoid, ontology.RelRequestedReview); err != nil {
+				return err
+			}
+		}
+
+		if err := s.syncPRCommits(owner, repo, prKoid, prOnt.Number); err != nil {
+			return err
+		}
 		if err := s.syncPRIssues(owner, repo, prKoid, prOnt); err != nil {
+			return err
+		}
+		if err := s.syncPRJiraIssues(prKoid, prOnt); err != nil {
 			return err
 		}
 		if err := s.syncReviews(owner, repo, prKoid, prOnt.Number); err != nil {
@@ -455,25 +515,51 @@ func (s *syncer) syncPRs(owner, repo, repoKoid string, watermark time.Time) erro
 	return nil
 }
 
-// syncPRIssues links a PR to the issues its body references, fetching
-// referenced issues on demand (deduped per run) when the incremental
-// window excluded them.
+// syncPRCommits links a PR's commits with PART_OF (Commit → PullRequest):
+// PR-branch commits never reach the default-branch walk, so the PR's own
+// commit list ingests them (reusing syncCommit — upsert, merge lookup,
+// author edge) and links each to the PR.
+func (s *syncer) syncPRCommits(owner, repo, prKoid string, prNumber int) error {
+	commits, err := paginate(s.ctx, s.client, "pulls.commits", func(page int) ([]*gh.RepositoryCommit, *gh.Response, error) {
+		return s.client.gh.PullRequests.ListCommits(s.ctx, owner, repo, prNumber, &gh.ListOptions{PerPage: 100, Page: page})
+	})
+	if err != nil {
+		return err
+	}
+	for _, c := range commits {
+		commitKoid, err := s.syncCommit(c, owner, repo)
+		if err != nil {
+			return err
+		}
+		if err := s.relate(commitKoid, prKoid, ontology.RelPartOf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncPRIssues links a PR to the issues it closes, using GitHub's
+// authoritative closingIssuesReferences (GraphQL — the body keywords were
+// only a subset). Issues outside the incremental window are fetched on
+// demand, deduped per run; a closing reference to an issue that no longer
+// exists (deleted or private) is not an error — the reference just yields
+// no edge.
 func (s *syncer) syncPRIssues(owner, repo, prKoid string, pr ontology.PullRequest) error {
-	matches := closeRefRe.FindAllStringSubmatch(pr.Body, -1)
+	nums, _, err := retry(s.ctx, s.client, "graphql.closing-issues", func() ([]int, *gh.Response, error) {
+		return s.client.closingIssues(s.ctx, owner, repo, pr.Number)
+	})
+	if err != nil {
+		return err
+	}
 	seen := map[int]bool{}
-	for _, m := range matches {
-		num, err := strconv.Atoi(m[1])
-		if err != nil || seen[num] {
+	for _, num := range nums {
+		if seen[num] {
 			continue
 		}
 		seen[num] = true
 
 		koid, ok := s.issueKoids[num]
 		if !ok {
-			// Body regex is the fallback path (§13.4); authoritative linking
-			// data joins with GraphQL ClosingIssuesReferences when metrics
-			// need it. A referenced issue that no longer exists (deleted or
-			// private) is not an error — the reference just yields no edge.
 			i, _, err := retry(s.ctx, s.client, "issues.get", func() (*gh.Issue, *gh.Response, error) {
 				return s.client.gh.Issues.Get(s.ctx, owner, repo, num)
 			})
@@ -496,6 +582,42 @@ func (s *syncer) syncPRIssues(owner, repo, prKoid string, pr ontology.PullReques
 			s.issueKoids[num] = koid
 		}
 		if err := s.relate(prKoid, koid, ontology.RelImplements); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// jiraKeyPattern matches Jira issue keys mentioned in PR text: a project
+// prefix (letter, then letters/digits), a dash, and a number — SCRUM-2.
+// The pattern over-matches lookalike text such as UTF-8; that is harmless
+// because syncPRJiraIssues links only keys that resolve to an ingested
+// JiraIssue, so a bare mention never fabricates an edge.
+var jiraKeyPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]*-\d+\b`)
+
+// syncPRJiraIssues links a PR to the Jira issues its title, body, or branch
+// name mention by key (e.g. PR #8's branch "SCRUM-2-aikoql-…" vs Jira
+// SCRUM-2). Disabled without cfg.JiraSite; a key with no ingested JiraIssue
+// leaves no edge. IMPLEMENTS carries the link — Jira issues normalize to the
+// canonical Issue, so this is the same edge GitHub closing references use.
+func (s *syncer) syncPRJiraIssues(prKoid string, pr ontology.PullRequest) error {
+	if s.jiraSite == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, key := range jiraKeyPattern.FindAllString(pr.Title+"\n"+pr.Body+"\n"+pr.HeadRef, -1) {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		ko, err := s.store.GetByExternalID(s.ctx, ontology.JiraIssueExternalID(s.jiraSite, key))
+		if err != nil {
+			if errors.Is(err, knowledge.ErrNotFound) {
+				continue
+			}
+			return fmt.Errorf("github: lookup jira issue %s: %w", key, err)
+		}
+		if err := s.relate(prKoid, ko.Koid, ontology.RelImplements); err != nil {
 			return err
 		}
 	}
@@ -531,6 +653,161 @@ func (s *syncer) syncReviews(owner, repo string, prKoid string, prNumber int) er
 			if err := s.relate(prKoid, engKoid, ontology.RelReviewedBy); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// syncCI fetches the repo's workflow runs as Build objects, hanging off the
+// repo (CONTAINS_BUILD) and off the PRs the API links them to (HAS_BUILD —
+// the edge carries no outcome; conclusion lives on the Build).
+// Incrementality is the same client-side watermark as issues/PRs: a run's
+// updated_at advances while it progresses, and freezes once it completes.
+// ponytail: the full list is fetched each run like every other entity — a
+// `created` filter joins when a repo accumulates thousands of runs.
+func (s *syncer) syncCI(owner, repo, repoKoid string, watermark time.Time) error {
+	runs, err := paginate(s.ctx, s.client, "actions.runs", func(page int) ([]*gh.WorkflowRun, *gh.Response, error) {
+		batch, resp, err := s.client.gh.Actions.ListRepositoryWorkflowRuns(s.ctx, owner, repo, &gh.ListWorkflowRunsOptions{
+			ListOptions: gh.ListOptions{PerPage: 100, Page: page},
+		})
+		if err != nil {
+			return nil, resp, err
+		}
+		return batch.WorkflowRuns, resp, nil
+	})
+	if err != nil {
+		return err
+	}
+	s.buildRunIDsBySHA = map[string][]int64{}
+	s.buildKoids = map[int64]string{}
+	for _, run := range runs {
+		s.buildRunIDsBySHA[strings.ToLower(run.GetHeadSHA())] = append(
+			s.buildRunIDsBySHA[strings.ToLower(run.GetHeadSHA())], run.GetID())
+		if !watermark.IsZero() && ts(run.GetUpdatedAt()).Before(watermark) {
+			c := s.counts["Build"]
+			c.Skipped++
+			s.counts["Build"] = c
+			continue
+		}
+		buildOnt := toBuild(run, owner, repo)
+		ko, err := buildOnt.KnowledgeObject(ontology.NewProvenance(run.GetHTMLURL(), ts(run.GetUpdatedAt())))
+		if err != nil {
+			return err
+		}
+		buildKoid, err := s.upsert(ko)
+		if err != nil {
+			return err
+		}
+		s.buildKoids[run.GetID()] = buildKoid
+		if err := s.relate(repoKoid, buildKoid, ontology.RelContainsBuild); err != nil {
+			return err
+		}
+		// The run's pull_requests array names the PRs it covers. A PR the
+		// sync has not seen yet (or a build from before the repo's history
+		// window) yields no edge — the run still stores, unlinked.
+		for _, p := range run.PullRequests {
+			prKO, err := s.store.GetByExternalID(s.ctx, ontology.PRExternalID(owner, repo, p.GetNumber()))
+			if err != nil {
+				if errors.Is(err, knowledge.ErrNotFound) {
+					continue
+				}
+				return fmt.Errorf("github: lookup PR for build link: %w", err)
+			}
+			if err := s.relate(prKO.Koid, buildKoid, ontology.RelHasBuild); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// syncDeployments ingests the repo's deployment records and the services
+// they touch: AFFECTS links a deployment to its environment-named service
+// (the GitHub world's only service signal), and PRODUCED links it to every
+// build whose head commit is the deployed sha — sha association (Actions
+// deployments carry no run id), never a causation claim. Builds the
+// watermark skipped resolve through the store by deterministic external id;
+// a build older than the store's window yields no edge. Deployments
+// themselves are not watermark-gated — the list is one call and short;
+// idempotent upserts make re-listing free.
+func (s *syncer) syncDeployments(owner, repo, repoKoid string) error {
+	deps, err := paginate(s.ctx, s.client, "deployments.list", func(page int) ([]*gh.Deployment, *gh.Response, error) {
+		return s.client.gh.Repositories.ListDeployments(s.ctx, owner, repo, &gh.DeploymentsListOptions{
+			ListOptions: gh.ListOptions{PerPage: 100, Page: page},
+		})
+	})
+	if err != nil {
+		return err
+	}
+	for _, d := range deps {
+		depOnt := toDeployment(d, owner, repo)
+		ko, err := depOnt.KnowledgeObject(ontology.NewProvenance(d.GetURL(), depOnt.UpdatedAt))
+		if err != nil {
+			return err
+		}
+		depKoid, err := s.upsert(ko)
+		if err != nil {
+			return err
+		}
+		if err := s.relate(repoKoid, depKoid, ontology.RelContainsDeployment); err != nil {
+			return err
+		}
+		if env := depOnt.Environment; env != "" {
+			svcKO, err := toService(owner, repo, env).KnowledgeObject(ontology.NewProvenance(d.GetURL(), depOnt.UpdatedAt))
+			if err != nil {
+				return err
+			}
+			svcKoid, err := s.upsert(svcKO)
+			if err != nil {
+				return err
+			}
+			if err := s.relate(depKoid, svcKoid, ontology.RelAffects); err != nil {
+				return err
+			}
+		}
+		for _, runID := range s.buildRunIDsBySHA[strings.ToLower(depOnt.SHA)] {
+			koid, ok := s.buildKoids[runID]
+			if !ok {
+				buildKO, err := s.store.GetByExternalID(s.ctx, ontology.BuildExternalID(owner, repo, runID))
+				if err != nil {
+					if errors.Is(err, knowledge.ErrNotFound) {
+						continue
+					}
+					return fmt.Errorf("github: lookup build %d for deployment link: %w", runID, err)
+				}
+				koid = buildKO.Koid
+			}
+			if err := s.relate(koid, depKoid, ontology.RelProduced); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// syncReleases ingests the repo's releases hanging off the repo with
+// CONTAINS_RELEASE. target_commitish stays a property — it is a branch or
+// tag name as often as a commit sha. Like deployments, not watermark-gated:
+// one short list call, idempotent upserts make re-listing free.
+func (s *syncer) syncReleases(owner, repo, repoKoid string) error {
+	rels, err := paginate(s.ctx, s.client, "releases.list", func(page int) ([]*gh.RepositoryRelease, *gh.Response, error) {
+		return s.client.gh.Repositories.ListReleases(s.ctx, owner, repo, &gh.ListOptions{PerPage: 100, Page: page})
+	})
+	if err != nil {
+		return err
+	}
+	for _, r := range rels {
+		relOnt := toRelease(r, owner, repo)
+		ko, err := relOnt.KnowledgeObject(ontology.NewProvenance(r.GetHTMLURL(), relOnt.PublishedAt))
+		if err != nil {
+			return err
+		}
+		relKoid, err := s.upsert(ko)
+		if err != nil {
+			return err
+		}
+		if err := s.relate(repoKoid, relKoid, ontology.RelContainsRelease); err != nil {
+			return err
 		}
 	}
 	return nil

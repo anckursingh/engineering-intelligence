@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/anckursingh/engineering-intelligence/internal/ingestion"
@@ -130,10 +131,57 @@ func ingestFile(ctx context.Context, run *ingestion.Run, store knowledge.Knowled
 		koids[i] = koid
 	}
 
+	// Session containment: the graph path the population walk (intelligence)
+	// uses to reach telemetry from a PR-scoped contribution — contribution →
+	// AUTHORED inbound → task → CONTAINS_TASK inbound → session → children.
+	// Without these edges the interaction/run/task metrics are unreachable
+	// from any org scope (Milestone E board).
+	relateChildren := func(rel ontology.RelType, first, n int) error {
+		for i := 0; i < n; i++ {
+			if _, err := run.Apply(ctx, store, ingestion.Mutation{Relationships: []knowledge.Relationship{{
+				Type: string(rel), From: koids[0], To: koids[first+i],
+			}}}); err != nil {
+				return fmt.Errorf("claudecode: relate %s: %w", rel, err)
+			}
+			res.Relationships++
+		}
+		return nil
+	}
+	if err := relateChildren(ontology.RelContainsInteraction, 1, len(p.interactions)); err != nil {
+		return err
+	}
+	if err := relateChildren(ontology.RelContainsRun, 1+len(p.interactions), len(p.runs)); err != nil {
+		return err
+	}
+	if err := relateChildren(ontology.RelContainsTask, 1+len(p.interactions)+len(p.runs), len(p.tasks)); err != nil {
+		return err
+	}
+
+	// Task koids by tool_use id: the AgentTask → CodeContribution link
+	// (AUTHORED). The contribution's id embeds the producing task's tool_use
+	// id (sessionID:tool_use — both carry no colons), so the join needs no
+	// extra parsing state.
+	taskKoids := make(map[string]string, len(p.tasks))
+	for i, tk := range p.tasks {
+		taskKoids[tk.ID] = koids[1+len(p.interactions)+len(p.runs)+i]
+	}
+
 	// Contributions relate to the PR the session created. The PR must exist
 	// in the store — the telemetry only proves the PR URL, so a missing PR
-	// leaves the contribution unlinked, reported as such.
+	// leaves the contribution unlinked, reported as such. The task link
+	// above does not depend on the PR: the task produced the code either way.
 	for i, c := range p.contributions {
+		objIdx := 1 + len(p.interactions) + len(p.runs) + len(p.tasks) + i
+		if taskKoid, ok := taskKoids[taskID(c.ID)]; ok {
+			if _, err := run.Apply(ctx, store, ingestion.Mutation{Relationships: []knowledge.Relationship{{
+				Type: string(ontology.RelAuthored),
+				From: taskKoid,
+				To:   koids[objIdx],
+			}}}); err != nil {
+				return fmt.Errorf("claudecode: relate task contribution: %w", err)
+			}
+			res.Relationships++
+		}
 		if c.PRNumber == 0 {
 			res.Unlinked++
 			continue
@@ -146,8 +194,6 @@ func ingestFile(ctx context.Context, run *ingestion.Run, store knowledge.Knowled
 		if err != nil {
 			return fmt.Errorf("claudecode: lookup PR %s#%d: %w", c.Repository, c.PRNumber, err)
 		}
-		// The contribution's object index follows the append order above.
-		objIdx := 1 + len(p.interactions) + len(p.runs) + len(p.tasks) + i
 		if _, err := run.Apply(ctx, store, ingestion.Mutation{Relationships: []knowledge.Relationship{{
 			Type: string(ontology.RelAIContributes),
 			From: koids[objIdx],
@@ -158,6 +204,15 @@ func ingestFile(ctx context.Context, run *ingestion.Run, store knowledge.Knowled
 		res.Relationships++
 	}
 	return nil
+}
+
+// taskID extracts the producing task's tool_use id from a contribution id
+// (sessionID:tool_use). Empty when the id carries no separator — no edge.
+func taskID(contribID string) string {
+	if i := strings.LastIndex(contribID, ":"); i >= 0 {
+		return contribID[i+1:]
+	}
+	return ""
 }
 
 func prExternalID(ownerRepo string, num int) string {

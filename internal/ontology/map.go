@@ -42,6 +42,18 @@ func ReviewExternalID(owner, repo string, pr int, id int64) string {
 func BuildExternalID(owner, repo string, id int64) string {
 	return fmt.Sprintf("github.com:build:%s/%s:%d", owner, repo, id)
 }
+func DeploymentExternalID(owner, repo string, id int64) string {
+	return fmt.Sprintf("github.com:deployment:%s/%s:%d", owner, repo, id)
+}
+
+// ServiceExternalID names the repo-scoped environment. GitHub environment
+// names are [A-Za-z0-9_-]+, so the delimiter scheme stays collision-free.
+func ServiceExternalID(owner, repo, env string) string {
+	return fmt.Sprintf("github.com:service:%s/%s:%s", owner, repo, env)
+}
+func ReleaseExternalID(owner, repo string, id int64) string {
+	return fmt.Sprintf("github.com:release:%s/%s:%d", owner, repo, id)
+}
 
 // NewProvenance carries the source-side facts every knowledge object keeps
 // (AC-KG-004). Run-scoped fields (ObservedAt, IngestionRun) are the
@@ -128,4 +140,19 @@ func (r Review) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeO
 func (b Build) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
 	owner, repo, _ := strings.Cut(b.Repository, "/")
 	return toKnowledgeObject("Build", BuildExternalID(owner, repo, b.ID), b, prov)
+}
+
+func (d Deployment) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	owner, repo, _ := strings.Cut(d.Repository, "/")
+	return toKnowledgeObject("Deployment", DeploymentExternalID(owner, repo, d.ID), d, prov)
+}
+
+func (svc Service) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	owner, repo, _ := strings.Cut(svc.Repository, "/")
+	return toKnowledgeObject("Service", ServiceExternalID(owner, repo, svc.Name), svc, prov)
+}
+
+func (r Release) KnowledgeObject(prov knowledge.Provenance) (knowledge.KnowledgeObject, error) {
+	owner, repo, _ := strings.Cut(r.Repository, "/")
+	return toKnowledgeObject("Release", ReleaseExternalID(owner, repo, r.ID), r, prov)
 }

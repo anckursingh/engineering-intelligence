@@ -6,6 +6,7 @@ package github_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -29,18 +30,25 @@ func TestSyncRun1Full(t *testing.T) {
 		"Organization": {New: 1},
 		"Repository":   {New: 1},
 		"Issue":        {New: 2},
-		"Commit":       {New: 2},
-		"PullRequest":  {New: 1},
-		"Review":       {New: 1},
-		"Engineer":     {New: 2}, // ann (login, deduped across commit/PR/review) + bob (email)
+		// ShaA + ShaB from the default branch, PrSha from PR#3's commit list
+		"Commit":      {New: 3},
+		"PullRequest": {New: 1},
+		"Review":      {New: 2}, // the approved review + the dismissed one
+		// bob appears twice with no merge: the commit author resolves by email
+		// (bob@corp.example), the requested reviewer by login — GitHub hides
+		// emails in PR data, and the resolver never silently merges the two.
+		"Engineer": {New: 3}, // ann + email-bob + login-bob
 	}
 	for typ, wantC := range want {
 		if got := res.Counts[typ]; got != wantC {
 			t.Errorf("count %s = %+v, want %+v", typ, got, wantC)
 		}
 	}
-	if res.Relationships != 9 {
-		t.Errorf("relationships = %d, want 9", res.Relationships)
+	// base 12 + PART_OF (PrSha → PR#3) + PrSha's author edge — PrSha's author
+	// is the same noreply ann as ShaA's, so no new engineer, but the write
+	// was issued and the call counter sees it.
+	if res.Relationships != 14 {
+		t.Errorf("relationships = %d, want 14", res.Relationships)
 	}
 
 	// AC-KG-001 mechanics: from the PR, reach repo, issue, author, review,
@@ -120,8 +128,184 @@ func TestSyncSkipsEmptyRepo(t *testing.T) {
 	if got := res.Counts["Repository"]; got != (github.Count{New: 2}) {
 		t.Errorf("Repository count = %+v, want 2 (the empty repo itself is synced)", got)
 	}
-	if got := res.Counts["Commit"]; got != (github.Count{New: 2}) {
-		t.Errorf("Commit count = %+v, want 2 (the empty repo contributes none)", got)
+	if got := res.Counts["Commit"]; got != (github.Count{New: 3}) {
+		t.Errorf("Commit count = %+v, want 3 (widgets: ShaA, ShaB, PR#3's PrSha; the empty repo contributes none)", got)
+	}
+}
+
+// Roadmap Milestone B: the PR list endpoint leaves merge_method and
+// requested_reviewers unpopulated, so the sync fetches the single-PR GET for
+// each changed PR and stores the richer record — labels, draft, merge
+// method, requested reviewers — alongside the list's fields.
+func TestSyncPRRichMetadata(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pr.Properties["merge_method"]; got != "squash" {
+		t.Errorf("merge_method = %v, want squash (single-PR GET field)", got)
+	}
+	if got := pr.Properties["draft"]; got != false {
+		t.Errorf("draft = %v, want false", got)
+	}
+	if got := pr.Properties["labels"]; !reflect.DeepEqual(got, []any{"enhancement"}) {
+		t.Errorf("labels = %v, want [enhancement]", got)
+	}
+	if got := pr.Properties["requested_reviewers"]; !reflect.DeepEqual(got, []any{"bob"}) {
+		t.Errorf("requested_reviewers = %v, want [bob]", got)
+	}
+}
+
+// Roadmap Milestone B review lifecycle: the graph distinguishes the five
+// states — requested (REQUESTED_REVIEW, the PR's current request snapshot)
+// and the submitted states, which Review.State carries verbatim including
+// DISMISSED.
+func TestReviewLifecycleStates(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelRequestedReview), knowledge.Outbound, 1,
+		"github.com:user:bob")
+	dismissed, err := store.GetByExternalID(context.Background(), "github.com:review:acme/widgets#3@1002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dismissed.Properties["state"] != "DISMISSED" {
+		t.Errorf("review 1002 state = %v, want DISMISSED", dismissed.Properties["state"])
+	}
+}
+
+// Roadmap Milestone B: commit ↔ PR links. PR-branch commits never reach the
+// default-branch walk, so the PR's own commit list ingests them and links
+// each with PART_OF (Commit → PullRequest) — the graph reconstructs
+// Engineer → Commit → PR.
+func TestSyncPRCommits(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelPartOf), knowledge.Inbound, 1,
+		"github.com:commit:acme/widgets@"+githubtest.PrSha)
+	commit, err := store.GetByExternalID(context.Background(), "github.com:commit:acme/widgets@"+githubtest.PrSha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same noreply identity as ShaA's author: one ann, not a second engineer.
+	githubtest.AssertReaches(t, store, commit.Koid, string(ontology.RelAuthored), knowledge.Inbound, 1,
+		"github.com:user:ann")
+}
+
+// Roadmap Milestone C: deployments ingest as Deployment objects with the
+// repo-scoped environment as Service (Deployment AFFECTS Service), and each
+// build whose head sha is the deployed sha gets Build PRODUCED Deployment —
+// sha association, the strongest link GitHub exposes (deployments created by
+// Actions carry no run id). A deployment whose build predates the sync window
+// links through the store on a later run; a sha with no build leaves no edge.
+func TestSyncDeployments(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddBuilds()
+	w.AddDeployments()
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Deployment"]; got != (github.Count{New: 2}) {
+		t.Errorf("Deployment count = %+v, want 2 new", got)
+	}
+	if got := res.Counts["Service"]; got != (github.Count{New: 2}) {
+		t.Errorf("Service count = %+v, want 2 new (production + staging)", got)
+	}
+
+	dep300, err := store.GetByExternalID(context.Background(), "github.com:deployment:acme/widgets:300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsDeployment), knowledge.Outbound, 1, dep300.ExternalID)
+	githubtest.AssertReaches(t, store, dep300.Koid, string(ontology.RelProduced), knowledge.Inbound, 1,
+		"github.com:build:acme/widgets:200")
+	githubtest.AssertReaches(t, store, dep300.Koid, string(ontology.RelAffects), knowledge.Outbound, 1,
+		"github.com:service:acme/widgets:production")
+	dep301, err := store.GetByExternalID(context.Background(), "github.com:deployment:acme/widgets:301")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), dep301.Koid, string(ontology.RelProduced), knowledge.Inbound, 1)
+	if err != nil || len(got) != 0 {
+		t.Errorf("deployment at a sha with no build must leave no PRODUCED edge: %+v, %v", got, err)
+	}
+
+	// Run 2: deployment 302 sits at ShaB like 300, but build 200 is now
+	// watermark-skipped — the link must resolve through the store.
+	w.AddDeploymentToOldBuild()
+	res2, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res2.Counts["Deployment"]; got != (github.Count{New: 1}) {
+		t.Errorf("run2 Deployment count = %+v, want 1 new", got)
+	}
+	if got := res2.Counts["Service"]; got != (github.Count{}) {
+		t.Errorf("run2 Service count = %+v, want zero (production exists)", got)
+	}
+	dep302, err := store.GetByExternalID(context.Background(), "github.com:deployment:acme/widgets:302")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, dep302.Koid, string(ontology.RelProduced), knowledge.Inbound, 1,
+		"github.com:build:acme/widgets:200")
+}
+
+func TestSyncReleases(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddReleases()
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Release"]; got != (github.Count{New: 2}) {
+		t.Errorf("Release count = %+v, want 2 new", got)
+	}
+
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsRelease), knowledge.Outbound, 1,
+		"github.com:release:acme/widgets:700", "github.com:release:acme/widgets:701")
+
+	rel701, err := store.GetByExternalID(context.Background(), "github.com:release:acme/widgets:701")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prerelease := rel701.Properties["prerelease"]
+	if prerelease != true {
+		t.Errorf("release 701 prerelease = %v, want true (prerelease flag stored)", prerelease)
 	}
 }
 
@@ -310,10 +494,10 @@ func TestMergeCommitModel(t *testing.T) {
 	}
 }
 
-// §13.4: PR-body regex is the fallback linking path — duplicate references
-// collapse to one edge, and a reference to a nonexistent issue skips the
-// link without failing the run. (Authoritative linking data — GitHub
-// GraphQL ClosingIssuesReferences — joins when metrics need it.)
+// §13.4: issue links come from GitHub's authoritative data (GraphQL
+// closingIssuesReferences), not the body text — duplicate nodes collapse to
+// one edge, and a reference to a nonexistent issue skips the link without
+// failing the run.
 func TestPRToIssueLinks(t *testing.T) {
 	w := githubtest.NewWorld(t)
 	w.AddLinkVariants()
@@ -336,5 +520,147 @@ func TestPRToIssueLinks(t *testing.T) {
 	got, err = store.Traverse(context.Background(), missing.Koid, string(ontology.RelImplements), knowledge.Outbound, 1)
 	if err != nil || len(got) != 0 {
 		t.Errorf("nonexistent referenced issue must leave no edge: %+v, %v", got, err)
+	}
+}
+
+// Roadmap Milestone B: authoritative issue ↔ PR links. PR#9's body has no
+// close keyword, but GitHub links it to issue #1 (timeline event) — the
+// GraphQL closingIssuesReferences data the body regex could never see.
+func TestPRAuthoritativeIssueLinks(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddLinkVariants()
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1,
+		"github.com:issue:acme/widgets#1")
+}
+
+// Jira cross-linking: a PR whose branch/title/body mention a Jira key links
+// to the ingested JiraIssue (IMPLEMENTS, same type as GitHub issues — both
+// normalize to the canonical Issue). A mention that resolves to no ingested
+// issue leaves no edge, so lookalike text can never fabricate one.
+func TestPRJiraIssueLinks(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddJiraMentionPR()
+	store := knowledge.NewMemory()
+
+	// The Jira side of the world: one ingested issue for the key PR #10
+	// mentions, one unrelated issue, one un-ingested lookalike key.
+	for _, issue := range []ontology.JiraIssue{
+		{Site: "acme.atlassian.net", Key: "SCRUM-2", Summary: "Ship the launch"},
+		{Site: "acme.atlassian.net", Key: "SCRUM-9", Summary: "Unrelated"},
+	} {
+		ko, err := issue.KnowledgeObject(ontology.NewJiraProvenance(
+			"https://acme.atlassian.net/browse/"+issue.Key, issue.UpdatedAt))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Upsert(context.Background(), ko); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := w.SyncConfig(t.TempDir(), store)
+	cfg.JiraSite = "acme.atlassian.net"
+	if _, err := github.Sync(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1,
+		"jira.com:acme.atlassian.net:issue:SCRUM-2")
+}
+
+// The Jira-link pass is opt-in: without cfg.JiraSite the connector must not
+// look up Jira issues at all (a Jira-synced db stays untouched).
+func TestPRJiraIssueLinksDisabled(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddJiraMentionPR()
+	store := knowledge.NewMemory()
+	if _, err := github.Sync(context.Background(), w.SyncConfig(t.TempDir(), store)); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Traverse(context.Background(), pr.Koid, string(ontology.RelImplements), knowledge.Outbound, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ko := range got {
+		if ko.ExternalID == "jira.com:acme.atlassian.net:issue:SCRUM-2" {
+			t.Errorf("Jira link written without cfg.JiraSite: %+v", ko)
+		}
+	}
+}
+
+// TestSyncCI: workflow runs normalize to Build objects hanging off the repo
+// (CONTAINS_BUILD), runs the API links to PRs get the HAS_BUILD edge, and the
+// second run gates on the watermark — completed earlier runs skip, the
+// finished in-progress run updates. The edge never claims an outcome: a
+// failed run linked to a PR is still HAS_BUILD (the conclusion lives on the
+// Build).
+func TestSyncCI(t *testing.T) {
+	w := githubtest.NewWorld(t)
+	w.AddBuilds()
+	store := knowledge.NewMemory()
+	cfg := w.SyncConfig(t.TempDir(), store)
+
+	res, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Counts["Build"]; got != (github.Count{New: 4}) {
+		t.Errorf("Build count = %+v, want 4 new", got)
+	}
+	// base 14 relationships + 4 CONTAINS_BUILD + 1 HAS_BUILD (run 200 links PR #3)
+	if res.Relationships != 19 {
+		t.Errorf("relationships = %d, want 19", res.Relationships)
+	}
+
+	build, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:200")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if build.Properties["conclusion"] != "success" || build.Properties["head_sha"] != githubtest.ShaB {
+		t.Errorf("build 200 = %+v, want conclusion success + head sha", build.Properties)
+	}
+	repo, err := store.GetByExternalID(context.Background(), "github.com:repo:acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, repo.Koid, string(ontology.RelContainsBuild), knowledge.Outbound, 1,
+		"github.com:build:acme/widgets:200", "github.com:build:acme/widgets:201", "github.com:build:acme/widgets:202", "github.com:build:acme/widgets:203")
+	pr, err := store.GetByExternalID(context.Background(), "github.com:pr:acme/widgets#3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubtest.AssertReaches(t, store, pr.Koid, string(ontology.RelHasBuild), knowledge.Outbound, 1, "github.com:build:acme/widgets:200")
+
+	// between runs: run 202 completes; runs 200/201/203 predate the watermark
+	w.FinishInProgressBuild()
+	res2, err := github.Sync(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := res2.Counts["Build"]; c != (github.Count{Updated: 1, Skipped: 3}) {
+		t.Errorf("run2 Build = %+v, want updated 1 skipped 3", c)
+	}
+	build202, err := store.GetByExternalID(context.Background(), "github.com:build:acme/widgets:202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if build202.Properties["status"] != "completed" || build202.Properties["conclusion"] != "failure" {
+		t.Errorf("build 202 = %+v, want completed failure", build202.Properties)
 	}
 }

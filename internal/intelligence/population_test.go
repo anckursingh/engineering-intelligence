@@ -42,13 +42,19 @@ func relate(t *testing.T, store knowledge.KnowledgeStore, rel knowledge.Relation
 
 // seedWorld builds the KG shape the population builder reads: org → repo →
 // two PRs (4d cycle each) → one review each; PR 1 also carries one DIRECT
-// AI contribution.
+// AI contribution, and the repo one completed CI build.
 func seedWorld(t *testing.T, store knowledge.KnowledgeStore) {
 	t.Helper()
 	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
 	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
 	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
 	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	buildKO := upsert(t, store, mapKO(t, ontology.Build{
+		Repository: "acme/widgets", ID: 200, Name: "CI", HeadSHA: "abc",
+		Conclusion: "success", Status: "completed",
+		CompletedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsBuild), From: repo.Koid, To: buildKO.Koid})
 
 	created := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	for _, n := range []int{1, 2} {
@@ -87,6 +93,12 @@ func TestPopulationFromScope(t *testing.T) {
 	if len(pop.CodeContributions) != 1 {
 		t.Fatalf("population = %d AI contributions, want 1", len(pop.CodeContributions))
 	}
+	if len(pop.Builds) != 1 {
+		t.Fatalf("population = %d builds, want 1", len(pop.Builds))
+	}
+	if b := pop.Builds[0]; b.Value.Conclusion != "success" || b.Value.CompletedAt.IsZero() {
+		t.Errorf("build did not round-trip: %+v", b)
+	}
 	if c := pop.CodeContributions[0]; !strings.HasPrefix(c.ExternalID, "ei.com:ai-contribution:") || c.Value.Attribution.Level != ontology.AttributionDirect {
 		t.Errorf("contribution did not round-trip: %+v", c)
 	}
@@ -101,6 +113,59 @@ func TestPopulationFromScope(t *testing.T) {
 	for _, e := range pop.Reviews {
 		if e.Value.SubmittedAt.IsZero() {
 			t.Errorf("review %s did not round-trip: %+v", e.ExternalID, e.Value)
+		}
+	}
+}
+
+// TestPopulationCollectsTelemetry: the walk reaches the session's
+// interactions, runs and tasks through the contribution's recorded session —
+// a first-hand ingest-time property, no edge hops that can be absent when
+// task links are unlinked. The path that feeds the board's AI workflow
+// metrics (§27).
+func TestPopulationCollectsTelemetry(t *testing.T) {
+	store := knowledge.NewMemory()
+	prov := ontology.NewProvenance("https://github.com/acme/widgets", time.Now())
+	sep := func(day int) time.Time { return time.Date(2026, 9, day, 0, 0, 0, 0, time.UTC) }
+	org := upsert(t, store, mapKO(t, ontology.Organization{Login: "acme"}.KnowledgeObject, prov))
+	repo := upsert(t, store, mapKO(t, ontology.Repository{Owner: "acme", Name: "widgets"}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelBelongsTo), From: repo.Koid, To: org.Koid})
+	pr := upsert(t, store, mapKO(t, ontology.PullRequest{
+		Repository: "acme/widgets", Number: 1, Merged: true, CreatedAt: sep(1), MergedAt: sep(5),
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelTargets), From: pr.Koid, To: repo.Koid})
+
+	session := upsert(t, store, mapKO(t, ontology.CodingSession{Source: "claude-code", SessionID: "s1", StartedAt: sep(1)}.KnowledgeObject, prov))
+	i1 := upsert(t, store, mapKO(t, ontology.Interaction{Source: "claude-code", ID: "i1", StartedAt: sep(2)}.KnowledgeObject, prov))
+	r1 := upsert(t, store, mapKO(t, ontology.AgentRun{Source: "claude-code", ID: "r1", StartedAt: sep(2), Status: "completed", CostUSD: 1.5}.KnowledgeObject, prov))
+	t1 := upsert(t, store, mapKO(t, ontology.AgentTask{Source: "claude-code", ID: "t1", Status: "completed", CompletedAt: sep(3)}.KnowledgeObject, prov))
+	t2 := upsert(t, store, mapKO(t, ontology.AgentTask{Source: "claude-code", ID: "t2", Status: "failed", Retries: 1, CompletedAt: sep(4)}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsInteraction), From: session.Koid, To: i1.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsRun), From: session.Koid, To: r1.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: t1.Koid})
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelContainsTask), From: session.Koid, To: t2.Koid})
+	contrib := upsert(t, store, mapKO(t, ontology.CodeContribution{
+		Source: "claude-code", ID: "c1", Repository: "acme/widgets", PRNumber: 1,
+		Session:     ontology.SessionExternalID("claude-code", "s1"),
+		Attribution: ontology.Attribution{Level: ontology.AttributionDirect, Source: "claude-code", Evidence: "session:s1"},
+	}.KnowledgeObject, prov))
+	relate(t, store, knowledge.Relationship{Type: string(ontology.RelAIContributes), From: contrib.Koid, To: pr.Koid})
+
+	pop, err := Population(context.Background(), store, ontology.OrgExternalID("acme"))
+	if err != nil {
+		t.Fatalf("population: %v", err)
+	}
+	if len(pop.Interactions) != 1 || len(pop.AgentRuns) != 1 || len(pop.AgentTasks) != 2 || len(pop.CodeContributions) != 1 {
+		t.Fatalf("population = %d interactions, %d runs, %d tasks, %d contributions; want 1/1/2/1",
+			len(pop.Interactions), len(pop.AgentRuns), len(pop.AgentTasks), len(pop.CodeContributions))
+	}
+	// TaskSessions records the session every collected task belongs to
+	// (item 46): both t1 and t2 as the session's CONTAINS_TASK children.
+	if len(pop.TaskSessions) != 2 {
+		t.Fatalf("TaskSessions = %d entries, want 2", len(pop.TaskSessions))
+	}
+	for _, id := range []string{"ei.com:agent-task:claude-code:t1", "ei.com:agent-task:claude-code:t2"} {
+		if got := pop.TaskSessions[id]; got != "ei.com:coding-session:claude-code:s1" {
+			t.Errorf("TaskSessions[%s] = %q, want the s1 session", id, got)
 		}
 	}
 }

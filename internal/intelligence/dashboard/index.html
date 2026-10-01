@@ -135,6 +135,7 @@ details.evidence li{
   padding:16px 18px; color:var(--muted); font-size:13px;
 }
 .note b{color:var(--text); font-weight:600}
+.section-note{margin-top:10px;color:var(--faint);font-size:12px}
 
 /* coverage bar */
 .covbar{display:flex; height:10px; border-radius:99px; overflow:hidden; background:var(--border-soft); margin-top:8px}
@@ -171,7 +172,7 @@ footer{
   </div>
   <div class="controls">
     <div class="field"><label for="scope">Scope</label>
-      <input id="scope" type="text" spellcheck="false" placeholder="github.com:account:you" aria-label="Scope external ID"></div>
+      <input id="scope" type="text" spellcheck="false" placeholder="Combine scopes with commas" aria-label="Comma-separated scope external IDs"></div>
     <div class="field"><label for="preset">Window</label>
       <select id="preset" aria-label="Window preset">
         <option value="30">Last 30 days</option>
@@ -201,6 +202,7 @@ footer{
 const $ = id => document.getElementById(id);
 const LS_BOARD = "ei.lastBoard", LS_SCOPE = "ei.scope", LS_WIN = "ei.window";
 let lastEtag = null, lastLoad = null;
+const boardCacheKey = scope => LS_BOARD + ":" + scope + ":" + win.from + ":" + win.to;
 
 const iso = d => d.toISOString().slice(0, 10);
 const startOf = n => { const d = new Date(); d.setDate(d.getDate() - n); return d; };
@@ -225,13 +227,14 @@ function applyPreset() {
 }
 
 function fmtValue(v, unit) {
-  if (unit === "%") return v.toFixed(1) + "%";
+  if (unit === "%") return { value: v.toFixed(1) + "%", unit: "" };
   if (unit === "days") {
-    if (v < 1) { const mins = v * 24 * 60; return mins < 60 ? Math.round(mins) + " min" : (mins / 60).toFixed(1) + " h"; }
-    return v.toFixed(1) + " d";
+    if (v < 1) { const mins = v * 24 * 60; return mins < 60 ? { value: String(Math.round(mins)), unit: "min" } : { value: (mins / 60).toFixed(1), unit: "h" }; }
+    return { value: v.toFixed(1), unit: "d" };
   }
-  if (unit === "PRs" || unit === "objects") return Math.round(v).toLocaleString();
-  return v.toFixed(1) + (unit ? " " + unit : "");
+  const integralUnits = ["PRs", "objects", "issues", "sprints", "memberships", "runs", "interactions", "deployments", "releases"];
+  const value = integralUnits.includes(unit) || Number.isInteger(v) ? Math.round(v).toLocaleString() : v.toFixed(1);
+  return { value, unit };
 }
 
 const stateColor = { CALCULATED: "var(--accent)", OBSERVED: "var(--green)", INFERRED: "var(--amber)", HYPOTHESIZED: "var(--violet)", UNKNOWN: "var(--faint)" };
@@ -248,9 +251,12 @@ function evidenceBlock(ev) {
 
 function metricCard(it) {
   const cls = "badge " + it.epistemic_state.toLowerCase();
+  const formatted = fmtValue(it.value, it.unit);
+  const singular = { issues: "issue", sprints: "sprint", deployments: "deployment", releases: "release", interactions: "interaction", runs: "run" };
+  const unit = it.value === 1 ? (singular[formatted.unit] || formatted.unit) : formatted.unit;
   return `<article class="card">
     <div class="card-top"><span class="metric-label">${it.label}</span><span class="${cls}">${it.epistemic_state}</span></div>
-    <div class="metric-value">${fmtValue(it.value, it.unit)}<span class="unit">${it.unit}</span></div>
+    <div class="metric-value">${formatted.value}<span class="unit">${unit}</span></div>
     ${evidenceBlock(it.evidence)}
   </article>`;
 }
@@ -268,7 +274,7 @@ function coverageBar(items) {
 function sectionHTML(s) {
   let body;
   if (s.id === "evidence_coverage") body = coverageBar(s.items || []);
-  else if (s.items && s.items.length) body = `<div class="grid">${s.items.map(metricCard).join("")}</div>`;
+  else if (s.items && s.items.length) body = `<div class="grid">${s.items.map(metricCard).join("")}</div>${s.note ? `<div class="section-note">${s.note}</div>` : ""}`;
   else body = `<div class="note">${s.note || "no data"}</div>`;
   const n = s.items ? ` · ${s.items.length}` : "";
   return `<section><div class="sec-head"><h2>${s.title}</h2><span class="sec-sub">${n}</span></div>${body}</section>`;
@@ -281,6 +287,11 @@ function paint(body) {
 }
 
 function setUpdated(when) {
+  if (when && when.getTime() === 0) {
+    $("updated").textContent = "Saved board · refreshing";
+    $("cachehint").textContent = "cached for this scope and window";
+    return;
+  }
   lastLoad = when || new Date();
   const ago = Math.max(0, Math.round((Date.now() - lastLoad.getTime()) / 1000));
   const s = ago < 60 ? "just now" : ago < 3600 ? Math.round(ago / 60) + "m ago" : Math.round(ago / 3600) + "h ago";
@@ -299,7 +310,7 @@ function clearError() { $("status").classList.remove("error"); $("error").style.
 async function load(force) {
   clearError();
   const scope = $("scope").value.trim();
-  if (!scope) { showError("Enter a scope — e.g. github.com:account:you"); return; }
+  if (!scope) { showError("Enter a scope — use commas to combine GitHub and Jira"); return; }
   localStorage.setItem(LS_SCOPE, scope);
   localStorage.setItem(LS_WIN, JSON.stringify(win));
   $("refresh").classList.add("spinning");
@@ -314,7 +325,7 @@ async function load(force) {
     }
     lastEtag = res.headers.get("ETag");
     const body = await res.json();
-    try { localStorage.setItem(LS_BOARD, JSON.stringify(body)); } catch {}
+    try { localStorage.setItem(boardCacheKey(scope), JSON.stringify(body)); } catch {}
     paint(body);
     setUpdated();
   } catch {
@@ -325,13 +336,14 @@ async function load(force) {
 }
 
 function init() {
-  // Instant paint from the last good board, then revalidate.
-  try {
-    const cached = localStorage.getItem(LS_BOARD);
-    if (cached) { paint(JSON.parse(cached)); setUpdated(new Date(0)); }
-  } catch {}
   const qs = new URLSearchParams(location.search);
   $("scope").value = qs.get("scope") || localStorage.getItem(LS_SCOPE) || "";
+  // Paint only a snapshot saved for this exact scope and window.
+  try {
+    const scope = $("scope").value.trim();
+    const cached = scope ? localStorage.getItem(boardCacheKey(scope)) : null;
+    if (cached) { paint(JSON.parse(cached)); setUpdated(new Date(0)); }
+  } catch {}
   $("from").value = win.from; $("to").value = win.to;
   $("foot").textContent = "Engineering Intelligence · metrics are deterministic over ingested objects; honest gaps are notes, never fabricated numbers · " + new Date().getFullYear();
 

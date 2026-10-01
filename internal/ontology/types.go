@@ -73,28 +73,39 @@ type Commit struct {
 }
 
 type PullRequest struct {
-	Repository     string    `json:"repository"`
-	Number         int       `json:"number"`
-	Title          string    `json:"title"`
-	Body           string    `json:"body,omitempty"`
-	State          string    `json:"state"`
-	Merged         bool      `json:"merged"`
-	AuthorLogin    string    `json:"author_login,omitempty"`
-	BaseRef        string    `json:"base_ref"`
-	HeadRef        string    `json:"head_ref"`
-	MergeCommitSHA string    `json:"merge_commit_sha,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	MergedAt       time.Time `json:"merged_at,omitempty"`
+	Repository         string    `json:"repository"`
+	Number             int       `json:"number"`
+	Title              string    `json:"title"`
+	Body               string    `json:"body,omitempty"`
+	State              string    `json:"state"`
+	Merged             bool      `json:"merged"`
+	AuthorLogin        string    `json:"author_login,omitempty"`
+	BaseRef            string    `json:"base_ref"`
+	HeadRef            string    `json:"head_ref"`
+	MergeCommitSHA     string    `json:"merge_commit_sha,omitempty"`
+	Additions          int       `json:"additions,omitempty"`
+	Deletions          int       `json:"deletions,omitempty"`
+	Labels             []string  `json:"labels,omitempty"`
+	Draft              bool      `json:"draft"`
+	MergeMethod        string    `json:"merge_method,omitempty"`        // merge|squash|rebase; single-PR GET only
+	RequestedReviewers []string  `json:"requested_reviewers,omitempty"` // current request snapshot, not history
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	MergedAt           time.Time `json:"merged_at,omitempty"`
 }
 
 type Review struct {
-	Repository    string    `json:"repository"`
-	PRNumber      int       `json:"pr_number"`
-	ID            int64     `json:"id"`
-	ReviewerLogin string    `json:"reviewer_login"`
-	State         string    `json:"state"` // APPROVED, CHANGES_REQUESTED, COMMENTED
-	SubmittedAt   time.Time `json:"submitted_at"`
+	Repository    string `json:"repository"`
+	PRNumber      int    `json:"pr_number"`
+	ID            int64  `json:"id"`
+	ReviewerLogin string `json:"reviewer_login"`
+	// State carries GitHub's review states verbatim: APPROVED,
+	// CHANGES_REQUESTED, COMMENTED (submitted without a verdict), DISMISSED.
+	// "requested" is not a Review state — GitHub keeps no request history;
+	// the current request set lives on PullRequest.RequestedReviewers and the
+	// REQUESTED_REVIEW edge.
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submitted_at"`
 }
 
 // Build is defined now so AC-KG-001 can complete next increment; the fetch
@@ -109,4 +120,41 @@ type Build struct {
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`
 	HTMLURL     string    `json:"html_url,omitempty"`
+}
+
+// Deployment is a GitHub deployment record. GitHub's deployments API carries
+// no html_url; provenance uses the API URL. State/status deliberately absent:
+// the deployments list has no terminal state (statuses are a separate
+// endpoint) and nothing consumes it yet.
+type Deployment struct {
+	Repository  string    `json:"repository"`
+	ID          int64     `json:"id"`
+	Environment string    `json:"environment"`
+	SHA         string    `json:"sha"` // the deployed commit
+	Ref         string    `json:"ref,omitempty"`
+	Description string    `json:"description,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Service is the product-level entity a deployment affects. In the
+// GitHub-only world the service IS the repo-scoped environment name (one
+// repo, many environments = many services); non-GitHub service registries
+// join through the same type later.
+type Service struct {
+	Repository string `json:"repository"`
+	Name       string `json:"name"` // the environment name
+}
+
+// Release is a GitHub repository release. TargetCommitish stays a property,
+// never an edge: it is a branch or tag name as often as a commit sha.
+type Release struct {
+	Repository      string    `json:"repository"`
+	ID              int64     `json:"id"`
+	TagName         string    `json:"tag_name"`
+	Name            string    `json:"name,omitempty"`
+	TargetCommitish string    `json:"target_commitish,omitempty"`
+	Prerelease      bool      `json:"prerelease"`
+	CreatedAt       time.Time `json:"created_at"`
+	PublishedAt     time.Time `json:"published_at,omitempty"`
 }
